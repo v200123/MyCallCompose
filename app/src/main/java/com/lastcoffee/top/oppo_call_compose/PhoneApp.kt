@@ -82,6 +82,9 @@ private val SecondaryText = Color(0xFF858585)
 private val DividerColor = Color(0xFFEEEEEE)
 private val TagOrange = Color(0xFFFF7926)
 
+// The supplied design is 1080 px wide at 2x density, so its Compose baseline is 540 dp.
+private val DesignSegmentWidth = 196.dp
+
 private enum class PhoneTab(val label: String, val icon: ImageVector) {
     CALLS("通话", Icons.Filled.Phone),
     CONTACTS("联系人", Icons.Filled.Contacts),
@@ -164,7 +167,7 @@ private fun CallsScreen(
                     records = if (missedOnly) demoCalls.filter { it.kind == CallKind.MISSED } else demoCalls,
                     state = listState,
                     onInfo = { selectedRecord = it },
-                    contentBottomPadding = if (dialPadVisible) 500.dp else 108.dp,
+                    contentBottomPadding = if (dialPadVisible) 570.dp else 128.dp,
                 )
             }
         }
@@ -217,22 +220,35 @@ private fun CallsTopBar(
     onSearchClick: () -> Unit,
 ) {
     val topPadding by animateDpAsState(if (compact) 8.dp else 18.dp, label = "top padding")
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = topPadding, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, end = 14.dp, top = topPadding, bottom = 10.dp)
+            .height(50.dp),
     ) {
         if (compact) {
-            Text("通话", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(112.dp))
-        } else {
-            Spacer(modifier = Modifier.width(112.dp))
+            Text(
+                "通话",
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
         }
-        SegmentedFilter(missedOnly, onFilterChange, modifier = Modifier.weight(1f))
-        IconButton(onClick = onSearchClick) { Icon(Icons.Filled.Search, contentDescription = "搜索", modifier = Modifier.size(31.dp)) }
-        Box {
-            IconButton(onClick = onMenuClick) { Icon(Icons.Filled.MoreVert, contentDescription = "更多") }
-            DropdownMenu(expanded = menuVisible, onDismissRequest = onDismissMenu) {
-                DropdownMenuItem(text = { Text("通话设置") }, onClick = onDismissMenu)
-                DropdownMenuItem(text = { Text("清除通话记录") }, onClick = onDismissMenu)
+        SegmentedFilter(
+            missedOnly,
+            onFilterChange,
+            modifier = Modifier.width(DesignSegmentWidth).align(Alignment.Center),
+        )
+        Row(modifier = Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onSearchClick) {
+                Icon(Icons.Filled.Search, contentDescription = "搜索", modifier = Modifier.size(34.dp))
+            }
+            Box {
+                IconButton(onClick = onMenuClick) { Icon(Icons.Filled.MoreVert, contentDescription = "更多") }
+                DropdownMenu(expanded = menuVisible, onDismissRequest = onDismissMenu) {
+                    DropdownMenuItem(text = { Text("通话设置") }, onClick = onDismissMenu)
+                    DropdownMenuItem(text = { Text("清除通话记录") }, onClick = onDismissMenu)
+                }
             }
         }
     }
@@ -242,7 +258,7 @@ private fun CallsTopBar(
 @Composable
 private fun SegmentedFilter(missedOnly: Boolean, onFilterChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     Row(
-        modifier = modifier.height(42.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFFE9E9E9)).padding(3.dp),
+        modifier = modifier.height(48.dp).clip(RoundedCornerShape(25.dp)).background(Color(0xFFE9E9E9)).padding(3.dp),
     ) {
         FilterChoice("全部", selected = !missedOnly, modifier = Modifier.weight(1f)) { onFilterChange(false) }
         FilterChoice("未接", selected = missedOnly, modifier = Modifier.weight(1f)) { onFilterChange(true) }
@@ -256,7 +272,7 @@ private fun FilterChoice(label: String, selected: Boolean, modifier: Modifier = 
             .background(if (selected) Color.White else Color.Transparent).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontSize = 16.sp, color = if (selected) Color(0xFF242424) else SecondaryText)
+        Text(label, fontSize = 22.sp, color = if (selected) Color(0xFF242424) else SecondaryText)
     }
 }
 
@@ -271,7 +287,7 @@ private fun CallList(
         item {
             Text(
                 "通话",
-                fontSize = 34.sp,
+                fontSize = 42.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(start = 22.dp, top = 8.dp, bottom = 24.dp),
             )
@@ -294,14 +310,14 @@ private fun CallRow(record: CallRecord, onInfo: () -> Unit) {
             modifier = Modifier.padding(top = 21.dp).size(20.dp),
         )
         Column(modifier = Modifier.weight(1f).padding(start = 14.dp, top = 14.dp, end = 2.dp, bottom = 12.dp)) {
-            Text(record.number, color = primaryColor, fontSize = 22.sp, lineHeight = 27.sp, fontWeight = FontWeight.Medium)
-            Text(record.description, color = SecondaryText, fontSize = 17.sp, lineHeight = 24.sp)
-            record.tag?.let { Text(it, color = TagOrange, fontSize = 17.sp, lineHeight = 22.sp) }
+            Text(record.number, color = primaryColor, fontSize = 30.sp, lineHeight = 36.sp, fontWeight = FontWeight.Medium)
+            Text(record.description, color = SecondaryText, fontSize = 24.sp, lineHeight = 32.sp)
+            record.tag?.let { Text(it, color = TagOrange, fontSize = 24.sp, lineHeight = 30.sp) }
             HorizontalDivider(color = DividerColor, modifier = Modifier.padding(top = 13.dp))
         }
-        Text(record.date, color = SecondaryText, fontSize = 17.sp, modifier = Modifier.padding(top = 24.dp))
+        Text(record.date, color = SecondaryText, fontSize = 24.sp, modifier = Modifier.padding(top = 24.dp))
         IconButton(onClick = onInfo, modifier = Modifier.padding(top = 12.dp, end = 10.dp)) {
-            Icon(Icons.Filled.Info, contentDescription = "详情", tint = Color(0xFF151515), modifier = Modifier.size(28.dp))
+            Icon(Icons.Filled.Info, contentDescription = "详情", tint = Color(0xFF151515), modifier = Modifier.size(32.dp))
         }
     }
 }
@@ -310,15 +326,15 @@ private fun CallRow(record: CallRecord, onInfo: () -> Unit) {
 private fun DialSearchResults(number: String, onInfo: (CallRecord) -> Unit) {
     val matches = remember(number) { demoContacts.filter { it.number.contains(number) }.ifEmpty { demoContacts } }
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(number, fontSize = 38.sp, fontWeight = FontWeight.Medium, modifier = Modifier.fillMaxWidth().padding(vertical = 22.dp), textAlign = TextAlign.Center)
+        Text(number, fontSize = 44.sp, fontWeight = FontWeight.Medium, modifier = Modifier.fillMaxWidth().padding(vertical = 22.dp), textAlign = TextAlign.Center)
         LazyColumn {
             items(matches) { contact ->
                 Row(modifier = Modifier.fillMaxWidth().padding(start = 21.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f).padding(vertical = 13.dp)) {
-                        Text(contact.name, fontSize = 21.sp, fontWeight = FontWeight.Medium)
+                        Text(contact.name, fontSize = 28.sp, fontWeight = FontWeight.Medium)
                         HighlightedNumber(contact.number, number)
                     }
-                    Text(contact.location, color = SecondaryText, fontSize = 16.sp, lineHeight = 23.sp, modifier = Modifier.width(112.dp), textAlign = TextAlign.End)
+                    Text(contact.location, color = SecondaryText, fontSize = 22.sp, lineHeight = 29.sp, modifier = Modifier.width(138.dp), textAlign = TextAlign.End)
                     IconButton(onClick = { onInfo(CallRecord(contact.number, contact.location, "联系人", CallKind.INCOMING)) }) {
                         Icon(Icons.Filled.Info, contentDescription = "详情", modifier = Modifier.size(28.dp))
                     }
@@ -339,19 +355,19 @@ private fun HighlightedNumber(number: String, query: String) {
             append(number.drop(start + query.length))
         }
     }
-    Text(text, color = SecondaryText, fontSize = 17.sp)
+    Text(text, color = SecondaryText, fontSize = 24.sp)
 }
 
 @Composable
 private fun DialPadFab(modifier: Modifier = Modifier, onClick: () -> Unit) {
     Button(
         onClick = onClick,
-        modifier = modifier.size(74.dp).shadow(12.dp, CircleShape),
+        modifier = modifier.size(88.dp).shadow(12.dp, CircleShape),
         shape = CircleShape,
         colors = ButtonDefaults.buttonColors(containerColor = OppoGreen),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
     ) {
-        Icon(Icons.Filled.Dialpad, contentDescription = "打开拨号盘", modifier = Modifier.size(35.dp), tint = Color.White)
+        Icon(Icons.Filled.Dialpad, contentDescription = "打开拨号盘", modifier = Modifier.size(40.dp), tint = Color.White)
     }
 }
 
@@ -367,7 +383,7 @@ private val dialKeys = listOf(
 @Composable
 private fun DialPad(number: String, onNumberChange: (String) -> Unit, onDial: () -> Unit, onDismiss: () -> Unit) {
     Surface(
-        modifier = Modifier.fillMaxWidth().height(474.dp).shadow(18.dp, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)),
+        modifier = Modifier.fillMaxWidth().height(550.dp).shadow(18.dp, RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)),
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         color = Color(0xFFFEFEFE),
     ) {
@@ -381,13 +397,13 @@ private fun DialPad(number: String, onNumberChange: (String) -> Unit, onDial: ()
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center,
                         ) {
-                            Text(key.digit, fontSize = 33.sp, fontWeight = FontWeight.Medium, lineHeight = 34.sp)
-                            Text(key.letters, fontSize = 12.sp, color = SecondaryText, lineHeight = 13.sp)
+                            Text(key.digit, fontSize = 42.sp, fontWeight = FontWeight.Medium, lineHeight = 43.sp)
+                            Text(key.letters, fontSize = 16.sp, color = SecondaryText, lineHeight = 17.sp)
                         }
                     }
                 }
             }
-            Row(modifier = Modifier.fillMaxWidth().height(88.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.fillMaxWidth().height(108.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Filled.Dialpad, contentDescription = "收起拨号盘", modifier = Modifier.size(31.dp))
@@ -396,11 +412,11 @@ private fun DialPad(number: String, onNumberChange: (String) -> Unit, onDial: ()
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     Button(
                         onClick = onDial,
-                        modifier = Modifier.size(73.dp),
+                        modifier = Modifier.size(88.dp),
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = OppoGreen),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                    ) { Icon(Icons.Filled.Call, contentDescription = "拨打", modifier = Modifier.size(35.dp)) }
+                    ) { Icon(Icons.Filled.Call, contentDescription = "拨打", modifier = Modifier.size(40.dp)) }
                 }
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     IconButton(onClick = { if (number.isNotEmpty()) onNumberChange(number.dropLast(1)) }) {
@@ -414,7 +430,7 @@ private fun DialPad(number: String, onNumberChange: (String) -> Unit, onDial: ()
 
 @Composable
 private fun BottomNavigationBar(selectedTab: PhoneTab, onSelected: (PhoneTab) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().height(76.dp).background(Color(0xFFFCFCFC)), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier = Modifier.fillMaxWidth().height(96.dp).background(Color(0xFFFCFCFC)), verticalAlignment = Alignment.CenterVertically) {
         PhoneTab.entries.forEach { tab ->
             val selected = selectedTab == tab
             Column(
@@ -422,9 +438,9 @@ private fun BottomNavigationBar(selectedTab: PhoneTab, onSelected: (PhoneTab) ->
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Icon(tab.icon, contentDescription = tab.label, modifier = Modifier.size(28.dp), tint = if (selected) Color(0xFF171717) else SecondaryText)
+                Icon(tab.icon, contentDescription = tab.label, modifier = Modifier.size(34.dp), tint = if (selected) Color(0xFF171717) else SecondaryText)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(tab.label, fontSize = 12.sp, color = if (selected) Color(0xFF171717) else SecondaryText)
+                Text(tab.label, fontSize = 16.sp, color = if (selected) Color(0xFF171717) else SecondaryText)
             }
         }
     }
@@ -433,15 +449,15 @@ private fun BottomNavigationBar(selectedTab: PhoneTab, onSelected: (PhoneTab) ->
 @Composable
 private fun SimpleDestination(title: String, subtitle: String, icon: ImageVector) {
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        Text(title, fontSize = 34.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 42.dp))
+        Text(title, fontSize = 42.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 42.dp))
         Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(icon, contentDescription = null, tint = Color(0xFFB7B7B7), modifier = Modifier.size(64.dp))
-            Text(subtitle, color = SecondaryText, fontSize = 15.sp, modifier = Modifier.padding(top = 16.dp))
+            Text(subtitle, color = SecondaryText, fontSize = 20.sp, modifier = Modifier.padding(top = 16.dp))
         }
     }
 }
 
-@Preview(showBackground = true, widthDp = 393, heightDp = 852)
+@Preview(showBackground = true, widthDp = 540, heightDp = 1176)
 @Composable
 private fun OppoPhonePreview() {
     OPPO_Call_ComposeTheme(darkTheme = false, dynamicColor = false) { OppoPhoneApp() }
