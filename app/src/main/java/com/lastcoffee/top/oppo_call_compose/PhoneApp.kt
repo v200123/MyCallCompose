@@ -1,11 +1,14 @@
 package com.lastcoffee.top.oppo_call_compose
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -24,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -32,6 +36,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -65,16 +72,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -92,6 +102,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import com.lastcoffee.top.oppo_call_compose.ui.theme.OPPO_Call_ComposeTheme
 import kotlinx.coroutines.delay
 
@@ -116,11 +130,17 @@ private enum class PhoneTab(val label: String, val icon: ImageVector) {
 }
 
 private data object HomeRoute
+private data object SettingsRoute
 private data class CallDetailRoute(val record: CallRecord)
 private data class InCallRoute(val number: String)
 
 @Composable
 fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
+    val context = LocalContext.current
+    val manualCallStore = remember(context) { ManualCallStore(context) }
+    val manualCalls by manualCallStore.calls.collectAsState(initial = emptyList())
+    LaunchedEffect(manualCallStore) { manualCallStore.importLegacyRecords() }
+    val records = manualCalls.map { it.toCallRecord() } + demoCalls
     val backStack = remember { mutableStateListOf<Any>(HomeRoute) }
 
     NavDisplay(
@@ -129,14 +149,32 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
         entryProvider = entryProvider {
             entry<HomeRoute> {
                 PhoneHomeScreen(
+                    records = records,
                     onShowDetail = { backStack.add(CallDetailRoute(it)) },
                     onStartCall = { backStack.add(InCallRoute(it)) },
+                    onOpenSettings = { backStack.add(SettingsRoute) },
                     onDial = onDial,
+                )
+            }
+            entry<SettingsRoute> {
+                CallSettingsScreen(
+                    manualCount = manualCalls.size,
+                    onBack = { backStack.removeLastOrNull() },
+                    onSave = { newCall ->
+                        try {
+                            manualCallStore.add(newCall)
+                            backStack.removeLastOrNull()
+                            true
+                        } catch (_: Exception) {
+                            false
+                        }
+                    },
                 )
             }
             entry<CallDetailRoute> { route ->
                 CallDetailScreen(
                     record = route.record,
+                    allRecords = records,
                     onBack = { backStack.removeLastOrNull() },
                     onDial = { number -> backStack.add(InCallRoute(number)) },
                 )
@@ -150,8 +188,10 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
 
 @Composable
 private fun PhoneHomeScreen(
+    records: List<CallRecord>,
     onShowDetail: (CallRecord) -> Unit,
     onStartCall: (String) -> Unit,
+    onOpenSettings: () -> Unit,
     onDial: (String) -> Unit,
 ) {
     var selectedTab by remember { mutableStateOf(PhoneTab.CALLS) }
@@ -168,6 +208,7 @@ private fun PhoneHomeScreen(
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedTab) {
                     PhoneTab.CALLS -> CallsScreen(
+                        records = records,
                         dialPadVisible = dialPadVisible,
                         dialedNumber = dialedNumber,
                         onShowDialPad = { dialPadVisible = true },
@@ -180,6 +221,7 @@ private fun PhoneHomeScreen(
                             if (number.isNotBlank()) onStartCall(number) else onDial(number)
                         },
                         onShowDetail = onShowDetail,
+                        onOpenSettings = onOpenSettings,
                     )
                     PhoneTab.CONTACTS -> SimpleDestination("联系人", "联系人列表将在这里显示", Icons.Filled.Contacts)
                     PhoneTab.STORE -> SimpleDestination("营业厅", "套餐与便民服务将在这里显示", Icons.Filled.Storefront)
@@ -194,7 +236,7 @@ private fun PhoneHomeScreen(
 }
 
 @Composable
-private fun CallDetailScreen(record: CallRecord, onBack: () -> Unit, onDial: (String) -> Unit) {
+private fun CallDetailScreen(record: CallRecord, allRecords: List<CallRecord>, onBack: () -> Unit, onDial: (String) -> Unit) {
     val isEmergency = record.number == "紧急呼叫中心"
     val contact = remember(record) { demoContacts.firstOrNull { it.number == record.number } }
     val displayName = if (isEmergency) "紧急呼叫中心" else contact?.name ?: record.number
@@ -206,12 +248,12 @@ private fun CallDetailScreen(record: CallRecord, onBack: () -> Unit, onDial: (St
         normalizedDescription.contains("\n") -> normalizedDescription.substringAfter("\n").trim()
         else -> normalizedDescription.removePrefix("小布通话").trim()
     }
-    val records = remember(record) {
+    val records = remember(record, allRecords) {
         if (isEmergency) listOf(
             CallHistoryEntry("2026/9/27 21:58", CallKind.OUTGOING, "未接通"),
             CallHistoryEntry("2026/9/17 16:30", CallKind.OUTGOING, "未接通"),
             CallHistoryEntry("2026/9/17 16:27", CallKind.OUTGOING, "未接通"),
-        ) else demoCalls.filter { it.number == record.number }.map { historyRecord ->
+        ) else allRecords.filter { it.number == record.number }.map { historyRecord ->
             CallHistoryEntry(
                 date = historyRecord.detailTime ?: "${historyRecord.date} 17:22",
                 kind = historyRecord.kind,
@@ -397,6 +439,18 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
     var elapsedSeconds by remember { mutableIntStateOf(0) }
     var connectedAt by remember(number) { mutableStateOf<Long?>(null) }
     val context = LocalContext.current
+    val hangupPhrase = remember(context) { runCatching { voiceHangupPhrase(context) }.getOrDefault("语音口令") }
+    var microphoneGranted by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+    }
+    var permissionRequested by remember { mutableStateOf(false) }
+    var voiceListening by remember { mutableStateOf(false) }
+    var voiceFailed by remember { mutableStateOf(false) }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        microphoneGranted = granted
+    }
+    val lifecycleOwner = context as? LifecycleOwner
+    var isResumed by remember { mutableStateOf(lifecycleOwner?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) ?: true) }
     val contact = remember(number) { demoContacts.firstOrNull { it.number == number } }
     val callRecord = remember(number) { demoCalls.firstOrNull { it.description == number } }
     val displayName = contact?.name ?: callRecord?.number ?: number
@@ -413,6 +467,44 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
     }
 
     BackHandler { requestHangup() }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) isResumed = true
+            if (event == Lifecycle.Event.ON_PAUSE) isResumed = false
+        }
+        lifecycleOwner?.lifecycle?.addObserver(observer)
+        onDispose { lifecycleOwner?.lifecycle?.removeObserver(observer) }
+    }
+
+    LaunchedEffect(callState) {
+        if (callState == DemoCallState.ACTIVE && !microphoneGranted && !permissionRequested) {
+            permissionRequested = true
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    DisposableEffect(callState, microphoneGranted, isResumed) {
+        if (callState == DemoCallState.ACTIVE && microphoneGranted && isResumed) {
+            voiceFailed = false
+            val detector = VoiceHangupDetector(
+                context = context.applicationContext,
+                onListening = { voiceListening = true },
+                onKeyword = { requestHangup() },
+                onFailure = {
+                    voiceListening = false
+                    voiceFailed = true
+                },
+            )
+            detector.start()
+            onDispose {
+                detector.stop()
+                voiceListening = false
+            }
+        } else {
+            onDispose { }
+        }
+    }
 
     LaunchedEffect(callState) {
         when (callState) {
@@ -504,6 +596,24 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
                         Text("模拟接通", color = Color(0xFFB5E8B8))
                     }
                 }
+                if (callState == DemoCallState.ACTIVE) {
+                    if (!microphoneGranted) {
+                        TextButton(onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }) {
+                            Text("开启语音挂断", color = Color(0xFFB5E8B8))
+                        }
+                    } else {
+                        Text(
+                            when {
+                                voiceFailed -> "语音挂断不可用"
+                                voiceListening -> "语音挂断已开启：$hangupPhrase"
+                                else -> "正在准备语音挂断"
+                            },
+                            color = Color(0x99FFFFFF),
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
             }
 
             if (dialpadOpen) {
@@ -580,6 +690,7 @@ private fun InCallDtmfPad(digits: String, onDigit: (String) -> Unit, onClose: ()
 
 @Composable
 private fun CallsScreen(
+    records: List<CallRecord>,
     dialPadVisible: Boolean,
     dialedNumber: String,
     onShowDialPad: () -> Unit,
@@ -587,29 +698,50 @@ private fun CallsScreen(
     onDialNumberChange: (String) -> Unit,
     onDial: (String) -> Unit,
     onShowDetail: (CallRecord) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     var missedOnly by remember { mutableStateOf(false) }
     var menuVisible by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    var compactHeader by remember { mutableStateOf(false) }
+    val headerTravelPx = with(LocalDensity.current) { 56.dp.toPx() }
+    var headerScrollPx by remember { mutableFloatStateOf(0f) }
+    val headerScroll = remember(listState, headerTravelPx) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val delta = available.y
+                if (delta > 0f && (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0)) {
+                    return Offset.Zero
+                }
+                val next = (headerScrollPx - delta).coerceIn(0f, headerTravelPx)
+                val consumed = headerScrollPx - next
+                headerScrollPx = next
+                return Offset(0f, consumed)
+            }
 
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 130 }
-            .collect { compactHeader = it }
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (available.y <= 0f) return Offset.Zero
+                val next = (headerScrollPx - available.y).coerceAtLeast(0f)
+                val used = headerScrollPx - next
+                headerScrollPx = next
+                return Offset(0f, used)
+            }
+        }
     }
+    val headerProgress = (headerScrollPx / headerTravelPx).coerceIn(0f, 1f)
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().then(if (dialedNumber.isBlank()) Modifier.nestedScroll(headerScroll) else Modifier)) {
             // Opening the dialpad alone keeps the call-page tabs visible; typing a
             // digit switches to the source-style number-search surface.
             if (!dialPadVisible || dialedNumber.isBlank()) {
                 CallsTopBar(
-                    compact = compactHeader,
+                    collapseProgress = headerProgress,
                     missedOnly = missedOnly,
                     onFilterChange = { missedOnly = it },
                     onMenuClick = { menuVisible = true },
                     menuVisible = menuVisible,
                     onDismissMenu = { menuVisible = false },
+                    onSettingsClick = onOpenSettings,
                     onSearchClick = onShowDialPad,
                 )
             }
@@ -617,7 +749,7 @@ private fun CallsScreen(
                 DialSearchResults(number = dialedNumber, onInfo = onShowDetail)
             } else {
                 CallList(
-                    records = if (missedOnly) demoCalls.filter { it.kind == CallKind.MISSED } else demoCalls,
+                    records = if (missedOnly) records.filter { it.kind == CallKind.MISSED } else records,
                     state = listState,
                     onInfo = onShowDetail,
                     contentBottomPadding = if (dialPadVisible) 370.dp else 72.dp,
@@ -650,48 +782,54 @@ private fun CallsScreen(
 
 @Composable
 private fun CallsTopBar(
-    compact: Boolean,
+    collapseProgress: Float,
     missedOnly: Boolean,
     onFilterChange: (Boolean) -> Unit,
     onMenuClick: () -> Unit,
     menuVisible: Boolean,
     onDismissMenu: () -> Unit,
+    onSettingsClick: () -> Unit,
     onSearchClick: () -> Unit,
 ) {
-    val topPadding by animateDpAsState(if (compact) 4.dp else 10.dp, label = "top padding")
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = topPadding, bottom = 6.dp)
-            .height(40.dp),
+            .height(112.dp - 56.dp * collapseProgress)
+            .background(Color.White),
     ) {
-        if (compact) {
-            Text(
-                "通话",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.CenterStart),
+        Box(modifier = Modifier.fillMaxWidth().height(56.dp).padding(start = 16.dp, end = 8.dp)) {
+            SegmentedFilter(
+                missedOnly,
+                onFilterChange,
+                modifier = Modifier.width(DesignSegmentWidth).align(Alignment.Center),
             )
-        }
-        SegmentedFilter(
-            missedOnly,
-            onFilterChange,
-            modifier = Modifier.width(DesignSegmentWidth).align(Alignment.Center),
-        )
-        Row(modifier = Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onSearchClick) {
-                Icon(Icons.Filled.Search, contentDescription = "搜索", modifier = Modifier.size(24.dp))
-            }
-            Box {
-                IconButton(onClick = onMenuClick) { Icon(Icons.Filled.MoreVert, contentDescription = "更多") }
-                DropdownMenu(expanded = menuVisible, onDismissRequest = onDismissMenu) {
-                    DropdownMenuItem(text = { Text("通话设置") }, onClick = onDismissMenu)
-                    DropdownMenuItem(text = { Text("清除通话记录") }, onClick = onDismissMenu)
+            Row(modifier = Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onSearchClick) {
+                    Icon(Icons.Filled.Search, contentDescription = "搜索", modifier = Modifier.size(24.dp))
+                }
+                Box {
+                    IconButton(onClick = onMenuClick) { Icon(Icons.Filled.MoreVert, contentDescription = "更多") }
+                    DropdownMenu(expanded = menuVisible, onDismissRequest = onDismissMenu) {
+                        DropdownMenuItem(text = { Text("通话设置") }, onClick = {
+                            onDismissMenu()
+                            onSettingsClick()
+                        })
+                        DropdownMenuItem(text = { Text("清除通话记录") }, onClick = onDismissMenu)
+                    }
                 }
             }
         }
+        Box(
+            modifier = Modifier.offset(x = 16.dp, y = 56.dp * (1f - collapseProgress)).height(56.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Text("通话", fontSize = (30f - 10f * collapseProgress).sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        }
+        HorizontalDivider(
+            color = DividerColor.copy(alpha = collapseProgress),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
-    if (compact) HorizontalDivider(color = DividerColor)
 }
 
 @Composable
@@ -723,14 +861,7 @@ private fun CallList(
     contentBottomPadding: androidx.compose.ui.unit.Dp,
 ) {
     LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
-        item {
-            Text(
-                "通话",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 12.dp),
-            )
-        }
+        item { Spacer(modifier = Modifier.height(8.dp)) }
         items(records) { record ->
             CallRow(record = record, onInfo = { onInfo(record) })
         }
