@@ -21,6 +21,8 @@ data class CallRecord(
     val tag: String? = null,
     val detailTime: String? = null,
     val durationDetail: String? = null,
+    val storedId: String? = null,
+    val demoIndex: Int? = null,
 )
 
 data class ContactMatch(

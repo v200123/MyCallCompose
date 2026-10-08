@@ -10,6 +10,9 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.room.withTransaction
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -28,11 +31,14 @@ data class ManualCall(
     val kind: CallKind,
     val durationSeconds: Int,
     val timeMillis: Long,
+    val wasConnected: Boolean = true,
 ) {
     fun toCallRecord(): CallRecord {
         val time = Instant.ofEpochMilli(timeMillis).atZone(ZoneId.systemDefault())
         val type = kind.displayLabel()
-        val detail = if (kind == CallKind.MISSED || kind == CallKind.BLOCKED) "未接通" else formatCallDuration(durationSeconds)
+        val detail = if (kind == CallKind.MISSED || kind == CallKind.BLOCKED ||
+            (kind == CallKind.OUTGOING && !wasConnected)
+        ) "未接通" else formatCallDuration(durationSeconds)
         return CallRecord(
             number = number,
             description = "$type  $detail",
@@ -40,6 +46,7 @@ data class ManualCall(
             kind = kind,
             detailTime = time.format(DateTimeFormatter.ofPattern("yyyy/M/d HH:mm")),
             durationDetail = "$type  $detail",
+            storedId = id,
         )
     }
 }
@@ -59,15 +66,30 @@ fun formatCallDuration(seconds: Int): String = when {
 
 class ManualCallStore(context: Context) {
     private val appContext = context.applicationContext
-    private val database = Room.databaseBuilder(appContext, ManualCallDatabase::class.java, "manual_calls.db").build()
+    private val database = Room.databaseBuilder(appContext, ManualCallDatabase::class.java, "manual_calls.db")
+        .addMigrations(ManualCallMigration1To2, ManualCallMigration2To3)
+        .build()
     private val dao = database.manualCallDao()
     private val importMutex = Mutex()
 
     val calls: Flow<List<ManualCall>> = dao.observeAll().map { rows -> rows.map { it.toManualCall() } }
+    val hiddenDemoIndexes: Flow<List<Int>> = dao.observeHiddenDemoIndexes()
 
     suspend fun add(call: ManualCall) {
         importLegacyRecords()
         dao.insert(call.toEntity())
+    }
+
+    suspend fun delete(record: CallRecord) {
+        record.storedId?.let { dao.deleteById(it) }
+        record.demoIndex?.let { dao.hideDemo(HiddenDemoCallEntity(it)) }
+    }
+
+    suspend fun clearAll(demoCount: Int) {
+        database.withTransaction {
+            dao.deleteAllCalls()
+            dao.hideDemo((0 until demoCount).map(::HiddenDemoCallEntity))
+        }
     }
 
     suspend fun importLegacyRecords() = withContext(Dispatchers.IO) {
@@ -100,11 +122,27 @@ data class ManualCallEntity(
     val kind: String,
     val durationSeconds: Int,
     val timeMillis: Long,
+    val wasConnected: Boolean,
 )
 
-private fun ManualCall.toEntity() = ManualCallEntity(id, number, kind.name, durationSeconds, timeMillis)
+@Entity(tableName = "hidden_demo_calls")
+data class HiddenDemoCallEntity(@PrimaryKey val demoIndex: Int)
 
-private fun ManualCallEntity.toManualCall() = ManualCall(id, number, CallKind.valueOf(kind), durationSeconds, timeMillis)
+private fun ManualCall.toEntity() = ManualCallEntity(id, number, kind.name, durationSeconds, timeMillis, wasConnected)
+
+private fun ManualCallEntity.toManualCall() = ManualCall(id, number, CallKind.valueOf(kind), durationSeconds, timeMillis, wasConnected)
+
+private val ManualCallMigration1To2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE manual_calls ADD COLUMN wasConnected INTEGER NOT NULL DEFAULT 1")
+    }
+}
+
+private val ManualCallMigration2To3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS hidden_demo_calls (demoIndex INTEGER NOT NULL, PRIMARY KEY(demoIndex))")
+    }
+}
 
 @Dao
 interface ManualCallDao {
@@ -116,9 +154,24 @@ interface ManualCallDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertLegacy(calls: List<ManualCallEntity>)
+
+    @Query("DELETE FROM manual_calls WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM manual_calls")
+    suspend fun deleteAllCalls()
+
+    @Query("SELECT demoIndex FROM hidden_demo_calls ORDER BY demoIndex")
+    fun observeHiddenDemoIndexes(): Flow<List<Int>>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun hideDemo(call: HiddenDemoCallEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun hideDemo(calls: List<HiddenDemoCallEntity>)
 }
 
-@Database(entities = [ManualCallEntity::class], version = 1, exportSchema = true)
+@Database(entities = [ManualCallEntity::class, HiddenDemoCallEntity::class], version = 3, exportSchema = true)
 abstract class ManualCallDatabase : RoomDatabase() {
     abstract fun manualCallDao(): ManualCallDao
 }

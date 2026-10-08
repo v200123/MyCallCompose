@@ -1,10 +1,15 @@
 package com.lastcoffee.top.oppo_call_compose
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,6 +34,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
@@ -62,6 +68,7 @@ import androidx.compose.material.icons.filled.VideoCall
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -74,6 +81,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -81,6 +89,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,10 +100,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
@@ -103,11 +114,13 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.lastcoffee.top.oppo_call_compose.ui.theme.OPPO_Call_ComposeTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val MissedRed = Color(0xFFD4483A)
 private val SecondaryText = Color(0xFF858585)
@@ -130,8 +143,10 @@ private enum class PhoneTab(val label: String, val icon: ImageVector) {
 }
 
 private data object HomeRoute
+private data object SearchRoute
 private data object SettingsRoute
 private data class CallDetailRoute(val record: CallRecord)
+private data class ContactDetailRoute(val contact: ContactMatch)
 private data class InCallRoute(val number: String)
 
 @Composable
@@ -139,9 +154,13 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
     val context = LocalContext.current
     val manualCallStore = remember(context) { ManualCallStore(context) }
     val manualCalls by manualCallStore.calls.collectAsState(initial = emptyList())
+    val hiddenDemoIndexes by manualCallStore.hiddenDemoIndexes.collectAsState(initial = emptyList())
     LaunchedEffect(manualCallStore) { manualCallStore.importLegacyRecords() }
-    val records = manualCalls.map { it.toCallRecord() } + demoCalls
+    val records = manualCalls.map { it.toCallRecord() } + demoCalls.mapIndexedNotNull { index, record ->
+        if (index in hiddenDemoIndexes) null else record.copy(demoIndex = index)
+    }
     val backStack = remember { mutableStateListOf<Any>(HomeRoute) }
+    var pendingDialNumber by remember { mutableStateOf<String?>(null) }
 
     NavDisplay(
         backStack = backStack,
@@ -151,10 +170,37 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                 PhoneHomeScreen(
                     records = records,
                     onShowDetail = { backStack.add(CallDetailRoute(it)) },
+                    onShowContact = { backStack.add(ContactDetailRoute(it)) },
                     onStartCall = { backStack.add(InCallRoute(it)) },
+                    onOpenSearch = { backStack.add(SearchRoute) },
                     onOpenSettings = { backStack.add(SettingsRoute) },
+                    pendingDialNumber = pendingDialNumber,
+                    onDialRequestConsumed = { pendingDialNumber = null },
+                    onClearCalls = {
+                        try {
+                            manualCallStore.clearAll(demoCalls.size)
+                            true
+                        } catch (_: Exception) {
+                            false
+                        }
+                    },
                     onDial = onDial,
                 )
+            }
+            entry<SearchRoute> {
+                Surface(color = Color.White, modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize()
+                            .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
+                            .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
+                    ) {
+                        ContactsScreen(
+                            onShowContact = { backStack.add(ContactDetailRoute(it)) },
+                            startSearching = true,
+                            onExitSearch = { backStack.removeLastOrNull() },
+                        )
+                    }
+                }
             }
             entry<SettingsRoute> {
                 CallSettingsScreen(
@@ -177,10 +223,38 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                     allRecords = records,
                     onBack = { backStack.removeLastOrNull() },
                     onDial = { number -> backStack.add(InCallRoute(number)) },
+                    onEditNumber = { number ->
+                        while (backStack.size > 1) backStack.removeLastOrNull()
+                        pendingDialNumber = number
+                    },
+                    onDelete = { record ->
+                        try {
+                            manualCallStore.delete(record)
+                            backStack.removeLastOrNull()
+                            true
+                        } catch (_: Exception) {
+                            false
+                        }
+                    },
+                )
+            }
+            entry<ContactDetailRoute> { route ->
+                CallDetailScreen(
+                    record = CallRecord(route.contact.number, route.contact.location, "", CallKind.OUTGOING),
+                    allRecords = records,
+                    onBack = { backStack.removeLastOrNull() },
+                    onDial = { number -> backStack.add(InCallRoute(number)) },
+                    fromContact = true,
                 )
             }
             entry<InCallRoute> { route ->
-                InCallScreen(number = route.number, onEndCall = { backStack.removeLastOrNull() })
+                InCallScreen(
+                    number = route.number,
+                    onCallFinished = { call ->
+                        manualCallStore.add(call)
+                        backStack.removeLastOrNull()
+                    },
+                )
             }
         },
     )
@@ -190,13 +264,30 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
 private fun PhoneHomeScreen(
     records: List<CallRecord>,
     onShowDetail: (CallRecord) -> Unit,
+    onShowContact: (ContactMatch) -> Unit,
     onStartCall: (String) -> Unit,
+    onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
+    pendingDialNumber: String?,
+    onDialRequestConsumed: () -> Unit,
+    onClearCalls: suspend () -> Boolean,
     onDial: (String) -> Unit,
 ) {
     var selectedTab by remember { mutableStateOf(PhoneTab.CALLS) }
     var dialPadVisible by remember { mutableStateOf(false) }
     var dialedNumber by remember { mutableStateOf("") }
+    LaunchedEffect(pendingDialNumber) {
+        if (pendingDialNumber != null) {
+            selectedTab = PhoneTab.CALLS
+            dialedNumber = pendingDialNumber
+            dialPadVisible = true
+            onDialRequestConsumed()
+        }
+    }
+    BackHandler(enabled = dialPadVisible) {
+        dialPadVisible = false
+        dialedNumber = ""
+    }
 
     Surface(color = Color.White, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -221,9 +312,11 @@ private fun PhoneHomeScreen(
                             if (number.isNotBlank()) onStartCall(number) else onDial(number)
                         },
                         onShowDetail = onShowDetail,
+                        onOpenSearch = onOpenSearch,
                         onOpenSettings = onOpenSettings,
+                        onClearCalls = onClearCalls,
                     )
-                    PhoneTab.CONTACTS -> SimpleDestination("联系人", "联系人列表将在这里显示", Icons.Filled.Contacts)
+                    PhoneTab.CONTACTS -> ContactsScreen(onShowContact = onShowContact)
                     PhoneTab.STORE -> SimpleDestination("营业厅", "套餐与便民服务将在这里显示", Icons.Filled.Storefront)
                 }
             }
@@ -236,7 +329,15 @@ private fun PhoneHomeScreen(
 }
 
 @Composable
-private fun CallDetailScreen(record: CallRecord, allRecords: List<CallRecord>, onBack: () -> Unit, onDial: (String) -> Unit) {
+private fun CallDetailScreen(
+    record: CallRecord,
+    allRecords: List<CallRecord>,
+    onBack: () -> Unit,
+    onDial: (String) -> Unit,
+    onEditNumber: (String) -> Unit = {},
+    onDelete: suspend (CallRecord) -> Boolean = { false },
+    fromContact: Boolean = false,
+) {
     val isEmergency = record.number == "紧急呼叫中心"
     val contact = remember(record) { demoContacts.firstOrNull { it.number == record.number } }
     val displayName = if (isEmergency) "紧急呼叫中心" else contact?.name ?: record.number
@@ -245,7 +346,8 @@ private fun CallDetailScreen(record: CallRecord, allRecords: List<CallRecord>, o
     val normalizedDescription = record.description.replace("\n", "  ")
     val location = contact?.location ?: when {
         isEmergency -> ""
-        normalizedDescription.contains("\n") -> normalizedDescription.substringAfter("\n").trim()
+        record.storedId != null -> "未知归属地"
+        record.description.contains("\n") -> record.description.substringAfter("\n").trim()
         else -> normalizedDescription.removePrefix("小布通话").trim()
     }
     val records = remember(record, allRecords) {
@@ -253,7 +355,10 @@ private fun CallDetailScreen(record: CallRecord, allRecords: List<CallRecord>, o
             CallHistoryEntry("2026/9/27 21:58", CallKind.OUTGOING, "未接通"),
             CallHistoryEntry("2026/9/17 16:30", CallKind.OUTGOING, "未接通"),
             CallHistoryEntry("2026/9/17 16:27", CallKind.OUTGOING, "未接通"),
-        ) else allRecords.filter { it.number == record.number }.map { historyRecord ->
+        ) else allRecords.filter { historyRecord ->
+            historyRecord.number == record.number ||
+                (contact != null && (historyRecord.number == contact.name || historyRecord.description == contact.number))
+        }.map { historyRecord ->
             CallHistoryEntry(
                 date = historyRecord.detailTime ?: "${historyRecord.date} 17:22",
                 kind = historyRecord.kind,
@@ -264,9 +369,14 @@ private fun CallDetailScreen(record: CallRecord, allRecords: List<CallRecord>, o
                     CallKind.BLOCKED -> "拒接 未接通"
                 },
             )
-        }.ifEmpty { listOf(CallHistoryEntry("${record.date} 17:22", record.kind, "呼出  未接通")) }
+        }
     }
     var menuExpanded by remember { mutableStateOf(false) }
+    var showAllHistory by remember(record) { mutableStateOf(false) }
+    var showDeleteDialog by remember(record) { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    var deleteFailed by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Surface(color = Color(0xFFF1F2F5), modifier = Modifier.fillMaxSize()) {
         Column(
@@ -283,16 +393,22 @@ private fun CallDetailScreen(record: CallRecord, allRecords: List<CallRecord>, o
                     Icon(Icons.Filled.ArrowBack, contentDescription = "返回", modifier = Modifier.size(28.dp))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = {}, modifier = Modifier.size(48.dp)) {
+                    if (contact == null && !fromContact) IconButton(onClick = {}, modifier = Modifier.size(48.dp)) {
                         Image(painterResource(R.drawable.ic_detail_add_contact), contentDescription = "添加联系人", modifier = Modifier.size(28.dp))
                     }
-                    Box {
+                    if (!fromContact && (record.storedId != null || record.demoIndex != null)) Box {
                         IconButton(onClick = { menuExpanded = true }, modifier = Modifier.size(48.dp)) {
                             Icon(Icons.Filled.MoreVert, contentDescription = "更多", modifier = Modifier.size(28.dp))
                         }
                         DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                            DropdownMenuItem(text = { Text("编辑号码") }, onClick = { menuExpanded = false })
-                            DropdownMenuItem(text = { Text("删除通话记录") }, onClick = { menuExpanded = false })
+                            DropdownMenuItem(text = { Text("编辑号码") }, onClick = {
+                                menuExpanded = false
+                                onEditNumber(number.filter { it.isDigit() || it in "+*#" })
+                            })
+                            DropdownMenuItem(text = { Text("删除通话记录") }, onClick = {
+                                menuExpanded = false
+                                showDeleteDialog = true
+                            })
                         }
                     }
                 }
@@ -347,7 +463,14 @@ private fun CallDetailScreen(record: CallRecord, allRecords: List<CallRecord>, o
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text("通话记录", fontSize = 20.sp, color = SecondaryText)
-                        Text("查看全部", fontSize = 18.sp, color = Color(0xFF249642), modifier = Modifier.clickable { })
+                        if (records.size > 3) {
+                            Text(
+                                if (showAllHistory) "收起" else "查看全部",
+                                fontSize = 18.sp,
+                                color = Color(0xFF249642),
+                                modifier = Modifier.clickable { showAllHistory = !showAllHistory },
+                            )
+                        }
                     }
                 }
                 item {
@@ -355,17 +478,22 @@ private fun CallDetailScreen(record: CallRecord, allRecords: List<CallRecord>, o
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)
                             .clip(RoundedCornerShape(18.dp)).background(Color.White),
                     ) {
-                        records.forEachIndexed { index, entry ->
-                            CallHistoryItem(entry)
-                            if (index < records.lastIndex) {
-                                HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 48.dp, end = 22.dp))
+                        if (records.isEmpty()) {
+                            Text("暂无通话记录", color = SecondaryText, fontSize = 16.sp, modifier = Modifier.padding(20.dp))
+                        } else {
+                            val visibleRecords = if (showAllHistory) records else records.take(3)
+                            visibleRecords.forEachIndexed { index, entry ->
+                                CallHistoryItem(entry)
+                                if (index < visibleRecords.lastIndex) {
+                                    HorizontalDivider(color = DividerColor, modifier = Modifier.padding(start = 48.dp, end = 22.dp))
+                                }
                             }
                         }
                     }
                 }
                 item { Spacer(modifier = Modifier.height(22.dp)) }
             }
-            if (!isEmergency) {
+            if (!isEmergency && contact == null) {
                 val annotatedProvider = buildAnnotatedString {
                     withStyle(SpanStyle(color = SecondaryText)) { append("该号码识别结果由") }
                     withStyle(SpanStyle(color = Color(0xFF249642))) { append("泰迪未来科技") }
@@ -379,6 +507,23 @@ private fun CallDetailScreen(record: CallRecord, allRecords: List<CallRecord>, o
                 )
             }
         }
+    }
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!deleting) showDeleteDialog = false },
+            title = { Text("要删除此通话记录吗？") },
+            text = { Text(if (deleteFailed) "删除失败，请重试" else "此通话记录将从本设备彻底删除") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleting = true
+                    scope.launch {
+                        deleteFailed = !onDelete(record)
+                        deleting = false
+                    }
+                }, enabled = !deleting) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteDialog = false }, enabled = !deleting) { Text("取消") } },
+        )
     }
 }
 
@@ -424,12 +569,12 @@ private fun CallHistoryItem(entry: CallHistoryEntry) {
 }
 
 private enum class DemoCallState {
-    DIALING, WAITING_FOR_ANSWER, ACTIVE, ON_HOLD, DISCONNECTING, DISCONNECTED
+    DIALING, WAITING_FOR_ANSWER, PLAYING_OUTCOME, ACTIVE, ON_HOLD, DISCONNECTING, DISCONNECTED
 }
 
-/** Local call preview. A real Telecom connection must drive these transitions in a dialer build. */
+/** In-app call preview with local state transitions. */
 @Composable
-private fun InCallScreen(number: String, onEndCall: () -> Unit) {
+private fun InCallScreen(number: String, onCallFinished: suspend (ManualCall) -> Unit) {
     var callState by remember(number) { mutableStateOf(DemoCallState.DIALING) }
     var muted by remember { mutableStateOf(false) }
     var speakerOn by remember { mutableStateOf(false) }
@@ -438,7 +583,29 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
     var dtmfDigits by remember { mutableStateOf("") }
     var elapsedSeconds by remember { mutableIntStateOf(0) }
     var connectedAt by remember(number) { mutableStateOf<Long?>(null) }
+    val callStartedAtMillis = remember(number) { System.currentTimeMillis() }
+    var durationAtEnd by remember(number) { mutableIntStateOf(0) }
     val context = LocalContext.current
+    val ringbackPrefs = remember(context) { context.getSharedPreferences("call_scenario_media", 0) }
+    var ringbackVideoUri by remember { mutableStateOf(ringbackPrefs.getString("ringback_video_uri", null)?.let(Uri::parse)) }
+    var ringbackVideoError by remember { mutableStateOf(false) }
+    var callOutcome by remember(number) { mutableStateOf<CallOutcome?>(null) }
+    var outcomeCycle by remember(number) { mutableIntStateOf(0) }
+    var outgoingMenuVisible by remember { mutableStateOf(false) }
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val persisted = runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }.isSuccess
+            if (persisted) {
+                ringbackPrefs.edit().putString("ringback_video_uri", uri.toString()).apply()
+                ringbackVideoError = false
+                ringbackVideoUri = uri
+            } else {
+                ringbackVideoError = true
+            }
+        }
+    }
     val hangupPhrase = remember(context) { runCatching { voiceHangupPhrase(context) }.getOrDefault("语音口令") }
     var microphoneGranted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
@@ -459,6 +626,9 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
 
     fun requestHangup() {
         if (callState != DemoCallState.DISCONNECTING && callState != DemoCallState.DISCONNECTED) {
+            durationAtEnd = connectedAt?.let { start ->
+                ((SystemClock.elapsedRealtime() - start) / 1_000).toInt().coerceAtLeast(1)
+            } ?: 0
             recording = false
             dialpadOpen = false
             dtmfDigits = ""
@@ -466,7 +636,38 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
         }
     }
 
-    BackHandler { requestHangup() }
+    fun playOutcome(outcome: CallOutcome) {
+        if (callState == DemoCallState.DIALING || callState == DemoCallState.WAITING_FOR_ANSWER) {
+            outgoingMenuVisible = false
+            callOutcome = outcome
+            outcomeCycle = 0
+            callState = DemoCallState.PLAYING_OUTCOME
+        }
+    }
+
+    BackHandler {
+        if (dialpadOpen) dialpadOpen = false else requestHangup()
+    }
+
+    DisposableEffect(context) {
+        val window = (context as? Activity)?.window
+        val bars = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        val wasLightStatusBar = bars?.isAppearanceLightStatusBars
+        val wasLightNavigationBar = bars?.isAppearanceLightNavigationBars
+        val wasNavigationBarContrastEnforced = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window?.isNavigationBarContrastEnforced
+        } else null
+        bars?.isAppearanceLightStatusBars = false
+        bars?.isAppearanceLightNavigationBars = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window?.isNavigationBarContrastEnforced = false
+        onDispose {
+            if (wasLightStatusBar != null) bars?.isAppearanceLightStatusBars = wasLightStatusBar
+            if (wasLightNavigationBar != null) bars?.isAppearanceLightNavigationBars = wasLightNavigationBar
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && wasNavigationBarContrastEnforced != null) {
+                window?.isNavigationBarContrastEnforced = wasNavigationBarContrastEnforced
+            }
+        }
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -506,15 +707,26 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
         }
     }
 
+    DisposableEffect(callState, callOutcome, isResumed) {
+        val outcome = callOutcome
+        if (callState == DemoCallState.PLAYING_OUTCOME && outcome != null && isResumed) {
+            val player = CallOutcomePlayer(
+                context = context,
+                outcome = outcome,
+                onCycle = { outcomeCycle = it },
+                onFinished = ::requestHangup,
+            )
+            onDispose { player.stop() }
+        } else {
+            onDispose { }
+        }
+    }
+
     LaunchedEffect(callState) {
         when (callState) {
             DemoCallState.DIALING -> {
                 delay(1_200)
                 callState = DemoCallState.WAITING_FOR_ANSWER
-            }
-            DemoCallState.WAITING_FOR_ANSWER -> {
-                delay(30_000)
-                callState = DemoCallState.DISCONNECTED
             }
             DemoCallState.DISCONNECTING -> {
                 delay(500)
@@ -522,9 +734,26 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
             }
             DemoCallState.DISCONNECTED -> {
                 delay(1_500)
-                onEndCall()
+                onCallFinished(
+                    ManualCall(
+                        number = number,
+                        kind = CallKind.OUTGOING,
+                        durationSeconds = durationAtEnd,
+                        timeMillis = callStartedAtMillis,
+                        wasConnected = connectedAt != null,
+                    ),
+                )
             }
             else -> Unit
+        }
+    }
+
+    // The document picker backgrounds the activity; choosing a video must not consume
+    // the answer window or finish the call behind the picker.
+    LaunchedEffect(callState, isResumed) {
+        if (callState == DemoCallState.WAITING_FOR_ANSWER && isResumed) {
+            delay(30_000)
+            playOutcome(CallOutcome.NO_ANSWER)
         }
     }
 
@@ -539,11 +768,22 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
     }
 
     val canUseCallControls = callState == DemoCallState.ACTIVE
+    val isOutgoing = callState == DemoCallState.DIALING || callState == DemoCallState.WAITING_FOR_ANSWER
     val canUseSpeaker = callState == DemoCallState.DIALING ||
         callState == DemoCallState.WAITING_FOR_ANSWER || canUseCallControls || callState == DemoCallState.ON_HOLD
     val canHangUp = callState != DemoCallState.DISCONNECTING && callState != DemoCallState.DISCONNECTED
 
     Surface(color = InCallBackground, modifier = Modifier.fillMaxSize()) {
+      Box(modifier = Modifier.fillMaxSize()) {
+        if (isOutgoing && isResumed && ringbackVideoUri != null && !ringbackVideoError) {
+            key(ringbackVideoUri) {
+                RingbackVideo(
+                    uri = ringbackVideoUri!!,
+                    onError = { ringbackVideoError = true },
+                )
+            }
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.52f)))
+        }
         Column(
             modifier = Modifier.fillMaxSize().padding(WindowInsets.statusBars.asPaddingValues())
                 .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
@@ -556,11 +796,11 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
                 // rather than centering it above the caller information.
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(displayName, color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(displayName, color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         displayNumber?.let {
-                            Text(it, color = Color.White, fontSize = 20.sp, modifier = Modifier.padding(top = 4.dp), maxLines = 1)
+                            Text(it, color = Color.White, fontSize = 16.sp, modifier = Modifier.padding(top = 4.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        Text(location, color = Color(0x99FFFFFF), fontSize = 14.sp, modifier = Modifier.padding(top = 3.dp), maxLines = 1)
+                        Text(location, color = Color(0x99FFFFFF), fontSize = 14.sp, modifier = Modifier.padding(top = 3.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Box(
                         modifier = Modifier.padding(start = 16.dp).size(70.dp).clip(CircleShape).background(Color(0xFF535353)),
@@ -571,17 +811,27 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
                 }
                 Row(modifier = Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                     val status = when (callState) {
-                        DemoCallState.DIALING -> "正在呼叫"
+                        DemoCallState.DIALING -> "正在呼叫..."
                         DemoCallState.WAITING_FOR_ANSWER -> "等待接听"
-                        DemoCallState.ACTIVE -> "通话中"
-                        DemoCallState.ON_HOLD -> "通话保持"
-                        DemoCallState.DISCONNECTING -> "正在挂断"
-                        DemoCallState.DISCONNECTED -> if (connectedAt == null) "未接通" else "通话结束"
+                        DemoCallState.PLAYING_OUTCOME -> callOutcome?.status ?: "未接通"
+                        DemoCallState.ACTIVE -> "正在通话"
+                        DemoCallState.ON_HOLD -> "保持"
+                        DemoCallState.DISCONNECTING -> "正在挂断..."
+                        DemoCallState.DISCONNECTED -> callOutcome?.status ?: if (connectedAt == null) "未接通" else "通话结束"
                     }
                     Text(status, color = Color.White, fontSize = 18.sp)
                     if (connectedAt != null && callState != DemoCallState.DISCONNECTING) {
                         Text("  %02d:%02d".format(elapsedSeconds / 60, elapsedSeconds % 60), color = Color.White, fontSize = 18.sp)
                     }
+                }
+                if (callState == DemoCallState.PLAYING_OUTCOME) {
+                    Text(
+                        if (callOutcome == CallOutcome.NO_ANSWER) "正在播放提示音 ${outcomeCycle.coerceAtLeast(1)}/2" else "正在播放提示音",
+                        color = Color(0x99FFFFFF), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                if (isOutgoing && ringbackVideoError) {
+                    Text("彩铃视频无法播放，请重新选择", color = Color(0xFFFFC9C9), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                 }
                 if (callState == DemoCallState.WAITING_FOR_ANSWER) {
                     TextButton(onClick = {
@@ -593,7 +843,7 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
                             vibrator.vibrate(VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE))
                         }
                     }) {
-                        Text("模拟接通", color = Color(0xFFB5E8B8))
+                        Text("接通", color = Color(0xFFB5E8B8))
                     }
                 }
                 if (callState == DemoCallState.ACTIVE) {
@@ -623,37 +873,106 @@ private fun InCallScreen(number: String, onEndCall: () -> Unit) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         InCallAction("静音", Icons.Filled.MicOff, muted, enabled = canUseCallControls) { muted = !muted }
                         InCallAction("扬声器", Icons.Filled.VolumeUp, speakerOn, enabled = canUseSpeaker) { speakerOn = !speakerOn }
-                        InCallAction("拨号键盘", Icons.Filled.Dialpad, false, enabled = canUseCallControls) {
+                        InCallAction("拨号盘", Icons.Filled.Dialpad, false, enabled = canUseCallControls) {
                             dtmfDigits = ""
                             dialpadOpen = true
                         }
                     }
                     Spacer(modifier = Modifier.height(20.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        InCallAction("保持", Icons.Filled.Pause, callState == DemoCallState.ON_HOLD,
-                            enabled = canUseCallControls || callState == DemoCallState.ON_HOLD) {
-                            if (callState == DemoCallState.ACTIVE) {
-                                recording = false
-                                dialpadOpen = false
-                                callState = DemoCallState.ON_HOLD
-                            } else {
-                                callState = DemoCallState.ACTIVE
+                        if (isOutgoing) {
+                            InCallAction("暂停", Icons.Filled.Pause, false, enabled = true) {
+                                playOutcome(CallOutcome.NO_ANSWER)
                             }
+                            InCallAction("视频", Icons.Filled.VideoCall, false, enabled = true) {
+                                playOutcome(CallOutcome.BUSY)
+                            }
+                            Box {
+                                InCallAction("更多", Icons.Filled.MoreVert, false, enabled = true) {
+                                    outgoingMenuVisible = true
+                                }
+                                DropdownMenu(expanded = outgoingMenuVisible, onDismissRequest = { outgoingMenuVisible = false }) {
+                                    DropdownMenuItem(text = { Text("选择彩铃视频") }, onClick = {
+                                        outgoingMenuVisible = false
+                                        videoPicker.launch(arrayOf("video/*"))
+                                    })
+                                    if (ringbackVideoUri != null) {
+                                        DropdownMenuItem(text = { Text("移除彩铃视频") }, onClick = {
+                                            outgoingMenuVisible = false
+                                            ringbackPrefs.edit().remove("ringback_video_uri").apply()
+                                            ringbackVideoUri = null
+                                            ringbackVideoError = false
+                                        })
+                                    }
+                                    DropdownMenuItem(text = { Text("空号") }, onClick = { playOutcome(CallOutcome.EMPTY_NUMBER) })
+                                    DropdownMenuItem(text = { Text("关机") }, onClick = { playOutcome(CallOutcome.POWERED_OFF) })
+                                }
+                            }
+                        } else {
+                            InCallAction("保持", Icons.Filled.Pause, callState == DemoCallState.ON_HOLD,
+                                enabled = canUseCallControls || callState == DemoCallState.ON_HOLD) {
+                                if (callState == DemoCallState.ACTIVE) {
+                                    recording = false
+                                    dialpadOpen = false
+                                    callState = DemoCallState.ON_HOLD
+                                } else {
+                                    callState = DemoCallState.ACTIVE
+                                }
+                            }
+                            InCallAction("录音", Icons.Filled.FiberManualRecord, recording, enabled = canUseCallControls) { recording = !recording }
+                            InCallAction("添加通话", Icons.Filled.Call, false, enabled = false) { }
                         }
-                        InCallAction("录音", Icons.Filled.FiberManualRecord, recording, enabled = canUseCallControls) { recording = !recording }
-                        InCallAction("添加通话", Icons.Filled.Call, false, enabled = false) { }
                     }
                 }
             }
-            IconButton(
-                onClick = ::requestHangup,
-                enabled = canHangUp,
-                modifier = Modifier.padding(top = 30.dp, bottom = 28.dp).size(68.dp).clip(CircleShape).background(InCallEndRed),
+            Column(
+                modifier = Modifier.padding(top = 30.dp, bottom = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Icon(Icons.Filled.CallEnd, contentDescription = "挂断", tint = Color.White, modifier = Modifier.size(36.dp))
+                IconButton(
+                    onClick = ::requestHangup,
+                    enabled = canHangUp,
+                    modifier = Modifier.size(70.dp).clip(CircleShape)
+                        .background(if (canHangUp) InCallEndRed else InCallButtonBackground),
+                ) {
+                    Icon(
+                        Icons.Filled.CallEnd,
+                        contentDescription = "挂断",
+                        tint = if (canHangUp) Color.White else Color(0x66FFFFFF),
+                        modifier = Modifier.size(36.dp),
+                    )
+                }
+                Text(
+                    "挂断",
+                    color = if (canHangUp) Color.White else Color(0x66FFFFFF),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
             }
         }
+      }
     }
+}
+
+@Composable
+private fun RingbackVideo(uri: Uri, onError: () -> Unit) {
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { context ->
+            VideoView(context).apply {
+                setOnPreparedListener { player ->
+                    player.isLooping = true
+                    start()
+                }
+                setOnErrorListener { _, _, _ ->
+                    onError()
+                    true
+                }
+                setVideoURI(uri)
+            }
+        },
+        onRelease = { it.stopPlayback() },
+    )
 }
 
 @Composable
@@ -698,10 +1017,16 @@ private fun CallsScreen(
     onDialNumberChange: (String) -> Unit,
     onDial: (String) -> Unit,
     onShowDetail: (CallRecord) -> Unit,
+    onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
+    onClearCalls: suspend () -> Boolean,
 ) {
     var missedOnly by remember { mutableStateOf(false) }
     var menuVisible by remember { mutableStateOf(false) }
+    var showClearDialog by remember { mutableStateOf(false) }
+    var clearing by remember { mutableStateOf(false) }
+    var clearFailed by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val headerTravelPx = with(LocalDensity.current) { 56.dp.toPx() }
     var headerScrollPx by remember { mutableFloatStateOf(0f) }
@@ -742,7 +1067,11 @@ private fun CallsScreen(
                     menuVisible = menuVisible,
                     onDismissMenu = { menuVisible = false },
                     onSettingsClick = onOpenSettings,
-                    onSearchClick = onShowDialPad,
+                    onSearchClick = onOpenSearch,
+                    onClearClick = {
+                        menuVisible = false
+                        showClearDialog = true
+                    },
                 )
             }
             if (dialedNumber.isNotBlank()) {
@@ -778,6 +1107,28 @@ private fun CallsScreen(
             )
         }
     }
+    if (showClearDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!clearing) showClearDialog = false },
+            title = { Text("要删除全部通话记录吗？") },
+            text = { Text(if (clearFailed) "删除失败，请重试" else "全部通话记录将从本设备彻底删除") },
+            confirmButton = {
+                TextButton(onClick = {
+                    clearing = true
+                    scope.launch {
+                        if (onClearCalls()) {
+                            showClearDialog = false
+                            clearFailed = false
+                        } else {
+                            clearFailed = true
+                        }
+                        clearing = false
+                    }
+                }, enabled = !clearing) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { showClearDialog = false }, enabled = !clearing) { Text("取消") } },
+        )
+    }
 }
 
 @Composable
@@ -790,6 +1141,7 @@ private fun CallsTopBar(
     onDismissMenu: () -> Unit,
     onSettingsClick: () -> Unit,
     onSearchClick: () -> Unit,
+    onClearClick: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -801,7 +1153,7 @@ private fun CallsTopBar(
             SegmentedFilter(
                 missedOnly,
                 onFilterChange,
-                modifier = Modifier.width(DesignSegmentWidth).align(Alignment.Center),
+                modifier = Modifier.requiredWidth(DesignSegmentWidth).align(Alignment.Center),
             )
             Row(modifier = Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onSearchClick) {
@@ -814,7 +1166,7 @@ private fun CallsTopBar(
                             onDismissMenu()
                             onSettingsClick()
                         })
-                        DropdownMenuItem(text = { Text("清除通话记录") }, onClick = onDismissMenu)
+                        DropdownMenuItem(text = { Text("清除通话记录") }, onClick = onClearClick)
                     }
                 }
             }
