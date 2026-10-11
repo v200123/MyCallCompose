@@ -4,11 +4,14 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.PixelFormat
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.view.WindowManager
 import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -38,6 +41,7 @@ import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -78,6 +82,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -95,7 +100,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
@@ -128,7 +135,6 @@ private val DividerColor = Color(0xFFEEEEEE)
 private val TagOrange = Color(0xFFFF7926)
 private val NavigationSelected = Color(0xE6000000)
 private val NavigationUnselected = Color(0x8A000000)
-private val InCallBackground = Color(0xFF101010)
 private val InCallButtonBackground = Color(0x29999999)
 private val InCallSelectedBackground = Color(0xFFE6E6E6)
 private val InCallEndRed = Color(0xFFE74D4D)
@@ -161,11 +167,24 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
     }
     val backStack = remember { mutableStateListOf<Any>(HomeRoute) }
     var pendingDialNumber by remember { mutableStateOf<String?>(null) }
+    val activeCall = backStack.lastOrNull() as? InCallRoute
 
-    NavDisplay(
-        backStack = backStack,
-        onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
-        entryProvider = entryProvider {
+    if (activeCall != null) {
+        // Keep the navigation history intact, but remove NavDisplay from the
+        // composition while the call window is transparent so the previous page
+        // cannot show through in place of the system wallpaper.
+        InCallScreen(
+            number = activeCall.number,
+            onCallFinished = { call ->
+                manualCallStore.add(call)
+                backStack.removeLastOrNull()
+            },
+        )
+    } else {
+        NavDisplay(
+            backStack = backStack,
+            onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
+            entryProvider = entryProvider {
             entry<HomeRoute> {
                 PhoneHomeScreen(
                     records = records,
@@ -247,17 +266,9 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                     fromContact = true,
                 )
             }
-            entry<InCallRoute> { route ->
-                InCallScreen(
-                    number = route.number,
-                    onCallFinished = { call ->
-                        manualCallStore.add(call)
-                        backStack.removeLastOrNull()
-                    },
-                )
-            }
-        },
-    )
+            },
+        )
+    }
 }
 
 @Composable
@@ -669,6 +680,34 @@ private fun InCallScreen(number: String, onCallFinished: suspend (ManualCall) ->
         }
     }
 
+    DisposableEffect(context) {
+        val window = (context as? Activity)?.window
+        val originalAttributes = window?.attributes
+        val originalWindowBackground = window?.decorView?.background
+        if (window != null) {
+            // Current Android versions do not let ordinary apps read the
+            // wallpaper bitmap. Show the system wallpaper behind this
+            // transparent call window and blur that layer through WindowManager.
+            window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+            window.setFormat(PixelFormat.TRANSLUCENT)
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER or
+                    WindowManager.LayoutParams.FLAG_DIM_BEHIND or
+                    WindowManager.LayoutParams.FLAG_BLUR_BEHIND,
+            )
+            window.setDimAmount(0.18f)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                window.attributes = window.attributes.apply { blurBehindRadius = 120 }
+            }
+        }
+        onDispose {
+            if (window != null && originalAttributes != null) {
+                window.attributes = originalAttributes
+                window.setBackgroundDrawable(originalWindowBackground)
+            }
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) isResumed = true
@@ -773,7 +812,12 @@ private fun InCallScreen(number: String, onCallFinished: suspend (ManualCall) ->
         callState == DemoCallState.WAITING_FOR_ANSWER || canUseCallControls || callState == DemoCallState.ON_HOLD
     val canHangUp = callState != DemoCallState.DISCONNECTING && callState != DemoCallState.DISCONNECTED
 
-    Surface(color = InCallBackground, modifier = Modifier.fillMaxSize()) {
+    Surface(color = Color.Transparent, modifier = Modifier.fillMaxSize().drawWithContent {
+        // The call Activity switches from an opaque page to a transparent
+        // wallpaper window. Clear the previous frame before drawing controls.
+        drawRect(Color.Transparent, blendMode = BlendMode.Clear)
+        drawContent()
+    }) {
       Box(modifier = Modifier.fillMaxSize()) {
         if (isOutgoing && isResumed && ringbackVideoUri != null && !ringbackVideoError) {
             key(ringbackVideoUri) {
@@ -1304,8 +1348,8 @@ private fun HighlightedNumber(number: String, query: String) {
 private fun DialPadFab(modifier: Modifier = Modifier, onClick: () -> Unit) {
     Button(
         onClick = onClick,
-        modifier = modifier.size(width = 106.dp, height = 40.dp).shadow(6.dp, RoundedCornerShape(22.dp)),
-        shape = RoundedCornerShape(22.dp),
+        modifier = modifier.size(56.dp).shadow(6.dp, RoundedCornerShape(56.dp)),
+        shape = RoundedCornerShape(56.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00BD13)),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
     ) {
@@ -1313,13 +1357,15 @@ private fun DialPadFab(modifier: Modifier = Modifier, onClick: () -> Unit) {
     }
 }
 
-private data class DialKey(val digit: String, val letters: String)
+private data class DialKey(val digit: String, val letters: String, val voicemailMark: Boolean = false)
 
 private val dialKeys = listOf(
-    DialKey("1", "◉"), DialKey("2", "ABC"), DialKey("3", "DEF"),
+    // DialpadView uses PINYIN_MODE: the digit grid stays numeric and the
+    // Latin T9 labels are shown as the secondary text on each key.
+    DialKey("1", "", voicemailMark = true), DialKey("2", "ABC"), DialKey("3", "DEF"),
     DialKey("4", "GHI"), DialKey("5", "JKL"), DialKey("6", "MNO"),
     DialKey("7", "PQRS"), DialKey("8", "TUV"), DialKey("9", "WXYZ"),
-    DialKey("*", "，"), DialKey("0", "+"), DialKey("#", "；"),
+    DialKey("*", ","), DialKey("0", "+"), DialKey("#", ";"),
 )
 
 @Composable
@@ -1331,16 +1377,40 @@ private fun DialPad(number: String, onNumberChange: (String) -> Unit, onDial: ()
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Box(modifier = Modifier.padding(top = 10.dp, bottom = 6.dp).size(width = 36.dp, height = 4.dp).clip(CircleShape).background(Color(0xFFC5C5C5)))
-            dialKeys.chunked(3).forEach { row ->
-                Row(modifier = Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    row.forEach { key ->
-                        Column(
-                            modifier = Modifier.weight(1f).fillMaxHeight().clickable { onNumberChange(number + key.digit) },
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                        ) {
-                            Text(key.digit, fontSize = 28.sp, fontWeight = FontWeight.Medium, lineHeight = 29.sp)
-                            Text(key.letters, fontSize = 10.sp, color = SecondaryText, lineHeight = 11.sp)
+            Spacer(modifier = Modifier.height(20.dp))
+            Column(
+                modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth().padding(horizontal = 16.dp),
+            ) {
+                dialKeys.chunked(3).forEach { row ->
+                    Row(modifier = Modifier.fillMaxWidth().height(58.dp)) {
+                        row.forEach { key ->
+                            Column(
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                                    .clickable(
+                                        interactionSource = null,
+                                        indication = ripple(bounded = true, radius = 29.dp),
+                                        onClickLabel = "输入${key.digit}",
+                                        onClick = { onNumberChange(number + key.digit) },
+                                    ),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Text(key.digit, fontSize = 28.sp, fontWeight = FontWeight.Normal, lineHeight = 34.sp)
+                                if (key.voicemailMark) {
+                                    Image(
+                                        painter = painterResource(R.drawable.ic_dial_key_voicemail),
+                                        contentDescription = "语音信箱",
+                                        modifier = Modifier.padding(top = 4.dp).size(width = 14.dp, height = 8.dp),
+                                    )
+                                } else {
+                                    Text(
+                                        key.letters,
+                                        color = Color(0x8A000000),
+                                        fontSize = 10.sp,
+                                        lineHeight = 11.sp,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
