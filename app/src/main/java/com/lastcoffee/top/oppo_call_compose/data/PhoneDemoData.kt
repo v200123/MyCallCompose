@@ -1,35 +1,8 @@
-package com.lastcoffee.top.oppo_call_compose
+package com.lastcoffee.top.oppo_call_compose.data
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.CallMade
-import androidx.compose.material.icons.automirrored.filled.CallReceived
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.ui.graphics.vector.ImageVector
-
-enum class CallKind(val icon: ImageVector) {
-    INCOMING(Icons.AutoMirrored.Filled.CallReceived),
-    OUTGOING(Icons.AutoMirrored.Filled.CallMade),
-    MISSED(Icons.AutoMirrored.Filled.CallReceived),
-    BLOCKED(Icons.Filled.Block),
-}
-
-data class CallRecord(
-    val number: String,
-    val description: String,
-    val date: String,
-    val kind: CallKind,
-    val tag: String? = null,
-    val detailTime: String? = null,
-    val durationDetail: String? = null,
-    val storedId: String? = null,
-    val demoIndex: Int? = null,
-)
-
-data class ContactMatch(
-    val name: String,
-    val number: String,
-    val location: String,
-)
+import com.lastcoffee.top.oppo_call_compose.model.CallKind
+import com.lastcoffee.top.oppo_call_compose.model.CallRecord
+import com.lastcoffee.top.oppo_call_compose.model.ContactMatch
 
 val demoCalls = listOf(
     CallRecord("紧急呼叫中心", "112", "2026/9/17", CallKind.INCOMING),

@@ -1,4 +1,4 @@
-package com.lastcoffee.top.oppo_call_compose
+package com.lastcoffee.top.oppo_call_compose.feature.settings
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
@@ -34,10 +34,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +47,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lastcoffee.top.oppo_call_compose.model.CallKind
+import com.lastcoffee.top.oppo_call_compose.model.ManualCall
+import com.lastcoffee.top.oppo_call_compose.model.displayLabel
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -57,7 +60,7 @@ private val CallTimeFormat = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm")
 private val PhoneNumberPattern = Regex("[+0-9*#()\\-\\s]{1,32}")
 
 @Composable
-fun CallSettingsScreen(manualCount: Int, onBack: () -> Unit, onSave: suspend (ManualCall) -> Boolean) {
+fun AddCallRecordScreen(manualCount: Int, onBack: () -> Unit, onSave: suspend (ManualCall) -> Boolean) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var number by remember { mutableStateOf("") }
@@ -102,7 +105,7 @@ fun CallSettingsScreen(manualCount: Int, onBack: () -> Unit, onSave: suspend (Ma
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                 }
-                Text("通话设置", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+                Text("添加通话记录", fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
             }
             Column(
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
