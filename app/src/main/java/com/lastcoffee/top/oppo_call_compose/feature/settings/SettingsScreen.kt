@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onAddCallRecord: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onAddCallRecord: () -> Unit, onOpenCallRules: () -> Unit) {
     Surface(color = Color(0xFFF1F2F5), modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxSize()
@@ -47,6 +47,17 @@ fun SettingsScreen(onBack: () -> Unit, onAddCallRecord: () -> Unit) {
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp)
+                    .background(Color.White, RoundedCornerShape(20.dp))
+                    .clickable(onClick = onOpenCallRules)
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("通话规则与音频", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
                     .background(Color.White, RoundedCornerShape(20.dp))
                     .clickable(onClick = onAddCallRecord)
                     .padding(horizontal = 20.dp, vertical = 20.dp),

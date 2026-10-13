@@ -14,6 +14,16 @@ import androidx.room.migration.Migration
 import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.lastcoffee.top.oppo_call_compose.model.CallKind
+import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
+import com.lastcoffee.top.oppo_call_compose.model.CallButtonId
+import com.lastcoffee.top.oppo_call_compose.model.CallButtonRule
+import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
+import com.lastcoffee.top.oppo_call_compose.model.CallMediaEntry
+import com.lastcoffee.top.oppo_call_compose.model.CallSessionSetup
+import com.lastcoffee.top.oppo_call_compose.model.CallStage
+import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
+import com.lastcoffee.top.oppo_call_compose.model.CallVisualStyle
+import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
 import com.lastcoffee.top.oppo_call_compose.model.CallRecord
 import com.lastcoffee.top.oppo_call_compose.model.ManualCall
 import kotlinx.coroutines.Dispatchers
@@ -23,17 +33,70 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 
 class ManualCallStore(context: Context) {
     private val appContext = context.applicationContext
     private val database = Room.databaseBuilder(appContext, ManualCallDatabase::class.java, "manual_calls.db")
-        .addMigrations(ManualCallMigration1To2, ManualCallMigration2To3)
+        .addMigrations(ManualCallMigration1To2, ManualCallMigration2To3, ManualCallMigration3To4)
         .build()
     private val dao = database.manualCallDao()
     private val importMutex = Mutex()
+    private val configurationMutex = Mutex()
 
     val calls: Flow<List<ManualCall>> = dao.observeAll().map { rows -> rows.map { it.toManualCall() } }
     val hiddenDemoIndexes: Flow<List<Int>> = dao.observeHiddenDemoIndexes()
+    val callConfiguration: Flow<CallFlowConfiguration> = dao.observeCallConfiguration().map { it?.content?.let { raw -> decodeConfiguration(raw) } ?: CallFlowConfiguration() }
+    val mediaEntries: Flow<List<CallMediaEntry>> = dao.observeMediaEntries().map { rows -> rows.map { it.toCallMediaEntry() } }
+    val numberPools: Flow<List<CallNumberPoolEntity>> = dao.observeNumberPools()
+
+    suspend fun configuration(): CallFlowConfiguration = configurationMutex.withLock {
+        val saved = dao.getCallConfiguration()
+        if (saved != null) decodeConfiguration(saved.content) else {
+            val defaults = CallFlowConfiguration()
+            dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(defaults)))
+            defaults
+        }
+    }
+
+    suspend fun saveConfiguration(configuration: CallFlowConfiguration) = configurationMutex.withLock {
+        val validIds = configuration.statuses.map { it.id }.toSet()
+        val normalized = configuration.copy(
+            initialStatusId = configuration.initialStatusId.takeIf { it in validIds } ?: configuration.statuses.firstOrNull()?.id ?: "dialing",
+            statuses = configuration.statuses.map { status ->
+                status.copy(
+                    durationSeconds = status.durationSeconds.coerceIn(0, 86_400),
+                    timeoutTargetId = status.timeoutTargetId?.takeIf { it in validIds },
+                    buttons = status.buttons.map { button -> button.copy(targetStatusId = button.targetStatusId?.takeIf { it in validIds }) },
+                )
+            },
+        )
+        dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(normalized)))
+    }
+
+    suspend fun prepareCall(number: String): CallSessionSetup {
+        val config = configuration()
+        val normalizedNumber = number.filter { it.isDigit() || it == '+' }
+        val existing = dao.getNumberPool(normalizedNumber)
+        val mode = existing?.let { CallAudioMode.fromStored(it.mode) } ?: config.selectedAudioMode.also {
+            dao.saveNumberPool(CallNumberPoolEntity(number = normalizedNumber, mode = it.name))
+        }
+        return CallSessionSetup(mode, config.initialStatusId)
+    }
+
+    suspend fun addMedia(entry: CallMediaEntry) {
+        dao.saveMediaEntry(entry.toEntity())
+    }
+
+    suspend fun deleteMedia(id: String): CallMediaEntry? {
+        val media = dao.getMediaEntry(id)?.toCallMediaEntry() ?: return null
+        dao.deleteMediaEntry(id)
+        return media
+    }
+
+    suspend fun updateNumberMode(number: String, mode: CallAudioMode) {
+        dao.saveNumberPool(CallNumberPoolEntity(number = number.filter { it.isDigit() || it == '+' }, mode = mode.name))
+    }
 
     suspend fun add(call: ManualCall) {
         importLegacyRecords()
@@ -88,9 +151,108 @@ data class ManualCallEntity(
 @Entity(tableName = "hidden_demo_calls")
 data class HiddenDemoCallEntity(@PrimaryKey val demoIndex: Int)
 
+@Entity(tableName = "call_rule_config")
+data class CallRuleConfigEntity(@PrimaryKey val id: Int = 1, val content: String)
+
+@Entity(tableName = "call_number_pools")
+data class CallNumberPoolEntity(@PrimaryKey val number: String, val mode: String)
+
+@Entity(tableName = "call_media")
+data class CallMediaEntity(
+    @PrimaryKey val id: String, val mode: String, val title: String, val filePath: String, val mimeType: String, val iconPath: String?,
+)
+
 private fun ManualCall.toEntity() = ManualCallEntity(id, number, kind.name, durationSeconds, timeMillis, wasConnected)
 
 private fun ManualCallEntity.toManualCall() = ManualCall(id, number, CallKind.valueOf(kind), durationSeconds, timeMillis, wasConnected)
+private fun CallMediaEntry.toEntity() = CallMediaEntity(id, mode.name, title, filePath, mimeType, iconPath)
+private fun CallMediaEntity.toCallMediaEntry() = CallMediaEntry(id, CallAudioMode.fromStored(mode), title, filePath, mimeType, iconPath)
+
+private fun encodeConfiguration(config: CallFlowConfiguration): String = JSONObject().apply {
+    put("initialStatusId", config.initialStatusId)
+    put("selectedAudioMode", config.selectedAudioMode.name)
+    put("statuses", JSONArray().apply {
+        config.statuses.forEach { status -> put(JSONObject().apply {
+            put("id", status.id); put("name", status.name); put("stage", status.stage.name)
+            put("durationSeconds", status.durationSeconds); put("timeoutTargetId", status.timeoutTargetId ?: JSONObject.NULL)
+            put("outcome", status.outcome ?: JSONObject.NULL)
+            put("mediaEntryId", status.mediaEntryId ?: JSONObject.NULL)
+            put("soundEntryId", status.soundEntryId ?: JSONObject.NULL)
+            put("playSoundOnce", status.playSoundOnce)
+            put("soundMuted", status.soundMuted)
+            put("callerName", status.callerName)
+            put("callerNumber", status.callerNumber)
+            put("locationText", status.locationText)
+            put("callerNameStyle", status.callerNameStyle.toJson())
+            put("callerNumberStyle", status.callerNumberStyle.toJson())
+            put("locationTextStyle", status.locationTextStyle.toJson())
+            put("statusTextStyle", status.statusTextStyle.toJson())
+            put("buttons", JSONArray().apply { status.buttons.forEach { button -> put(JSONObject().apply {
+                put("id", button.id.name); put("visible", button.visible); put("enabled", button.enabled)
+                put("targetStatusId", button.targetStatusId ?: JSONObject.NULL)
+                put("label", button.label ?: JSONObject.NULL)
+                put("visualStyle", button.visualStyle.toJson())
+            }) } })
+        }) }
+    })
+}.toString()
+
+private fun decodeConfiguration(raw: String): CallFlowConfiguration = runCatching {
+    val root = JSONObject(raw)
+    val statusesJson = root.optJSONArray("statuses") ?: JSONArray()
+    val statuses = buildList {
+        for (i in 0 until statusesJson.length()) {
+            val item = statusesJson.optJSONObject(i) ?: continue
+            val stage = CallStage.entries.firstOrNull { it.name == item.optString("stage") } ?: CallStage.WAITING
+            val buttonsJson = item.optJSONArray("buttons") ?: JSONArray()
+            val buttons = buildList {
+                for (j in 0 until buttonsJson.length()) {
+                    val button = buttonsJson.optJSONObject(j) ?: continue
+                    val id = CallButtonId.entries.firstOrNull { it.name == button.optString("id") } ?: continue
+                    add(CallButtonRule(id, button.optBoolean("visible", true), button.optBoolean("enabled", true), button.optString("targetStatusId").takeIf { it.isNotBlank() && it != "null" }, button.optString("label").takeIf { it.isNotBlank() && it != "null" }, button.optJSONObject("visualStyle")?.toVisualStyle() ?: CallVisualStyle()))
+                }
+            }.ifEmpty { com.lastcoffee.top.oppo_call_compose.model.defaultButtons(stage) }
+            add(CallStatusRule(
+                id = item.optString("id", "status-$i"), name = item.optString("name", "状态 ${i + 1}"), stage = stage,
+                durationSeconds = item.optInt("durationSeconds", 0), timeoutTargetId = item.optString("timeoutTargetId").takeIf { it.isNotBlank() && it != "null" },
+                buttons = buttons, outcome = item.optString("outcome").takeIf { it.isNotBlank() && it != "null" },
+                mediaEntryId = item.optString("mediaEntryId").takeIf { it.isNotBlank() && it != "null" },
+                soundEntryId = item.optString("soundEntryId").takeIf { it.isNotBlank() && it != "null" },
+                playSoundOnce = item.optBoolean("playSoundOnce", false),
+                soundMuted = item.optBoolean("soundMuted", false),
+                callerName = item.optString("callerName", ""),
+                callerNumber = item.optString("callerNumber", ""),
+                locationText = item.optString("locationText", ""),
+                callerNameStyle = item.optJSONObject("callerNameStyle")?.toVisualStyle() ?: CallVisualStyle(),
+                callerNumberStyle = item.optJSONObject("callerNumberStyle")?.toVisualStyle() ?: CallVisualStyle(),
+                locationTextStyle = item.optJSONObject("locationTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
+                statusTextStyle = item.optJSONObject("statusTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
+            ))
+        }
+    }.ifEmpty { defaultCallStatuses() }
+    val ids = statuses.map { it.id }.toSet()
+    CallFlowConfiguration(
+        initialStatusId = root.optString("initialStatusId", "dialing").takeIf { it in ids } ?: statuses.first().id,
+        selectedAudioMode = CallAudioMode.fromStored(root.optString("selectedAudioMode")), statuses = statuses,
+    )
+}.getOrElse { CallFlowConfiguration() }
+
+private fun CallVisualStyle.toJson() = JSONObject().apply {
+    put("offsetXdp", offsetXdp); put("offsetYdp", offsetYdp)
+    put("fontSizeSp", fontSizeSp ?: JSONObject.NULL)
+    put("textColorArgb", textColorArgb ?: JSONObject.NULL)
+    put("backgroundColorArgb", backgroundColorArgb ?: JSONObject.NULL)
+    put("visible", visible)
+}
+
+private fun JSONObject.toVisualStyle() = CallVisualStyle(
+    offsetXdp = optInt("offsetXdp", 0),
+    offsetYdp = optInt("offsetYdp", 0),
+    fontSizeSp = if (isNull("fontSizeSp")) null else optDouble("fontSizeSp").toFloat(),
+    textColorArgb = if (isNull("textColorArgb")) null else optLong("textColorArgb"),
+    backgroundColorArgb = if (isNull("backgroundColorArgb")) null else optLong("backgroundColorArgb"),
+    visible = optBoolean("visible", true),
+)
 
 private val ManualCallMigration1To2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -101,6 +263,14 @@ private val ManualCallMigration1To2 = object : Migration(1, 2) {
 private val ManualCallMigration2To3 = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS hidden_demo_calls (demoIndex INTEGER NOT NULL, PRIMARY KEY(demoIndex))")
+    }
+}
+
+private val ManualCallMigration3To4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS call_rule_config (id INTEGER NOT NULL, content TEXT NOT NULL, PRIMARY KEY(id))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS call_number_pools (number TEXT NOT NULL, mode TEXT NOT NULL, PRIMARY KEY(number))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS call_media (id TEXT NOT NULL, mode TEXT NOT NULL, title TEXT NOT NULL, filePath TEXT NOT NULL, mimeType TEXT NOT NULL, iconPath TEXT, PRIMARY KEY(id))")
     }
 }
 
@@ -129,9 +299,39 @@ interface ManualCallDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun hideDemo(calls: List<HiddenDemoCallEntity>)
+
+    @Query("SELECT * FROM call_rule_config WHERE id = 1")
+    fun observeCallConfiguration(): Flow<CallRuleConfigEntity?>
+
+    @Query("SELECT * FROM call_rule_config WHERE id = 1")
+    suspend fun getCallConfiguration(): CallRuleConfigEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveCallConfiguration(config: CallRuleConfigEntity)
+
+    @Query("SELECT * FROM call_number_pools ORDER BY number")
+    fun observeNumberPools(): Flow<List<CallNumberPoolEntity>>
+
+    @Query("SELECT * FROM call_number_pools WHERE number = :number LIMIT 1")
+    suspend fun getNumberPool(number: String): CallNumberPoolEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveNumberPool(entry: CallNumberPoolEntity)
+
+    @Query("SELECT * FROM call_media ORDER BY title COLLATE NOCASE")
+    fun observeMediaEntries(): Flow<List<CallMediaEntity>>
+
+    @Query("SELECT * FROM call_media WHERE id = :id LIMIT 1")
+    suspend fun getMediaEntry(id: String): CallMediaEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveMediaEntry(entry: CallMediaEntity)
+
+    @Query("DELETE FROM call_media WHERE id = :id")
+    suspend fun deleteMediaEntry(id: String)
 }
 
-@Database(entities = [ManualCallEntity::class, HiddenDemoCallEntity::class], version = 3, exportSchema = true)
+@Database(entities = [ManualCallEntity::class, HiddenDemoCallEntity::class, CallRuleConfigEntity::class, CallNumberPoolEntity::class, CallMediaEntity::class], version = 4, exportSchema = true)
 abstract class ManualCallDatabase : RoomDatabase() {
     abstract fun manualCallDao(): ManualCallDao
 }
