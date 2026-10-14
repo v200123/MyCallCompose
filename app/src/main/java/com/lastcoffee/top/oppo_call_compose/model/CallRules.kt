@@ -20,8 +20,8 @@ enum class CallStage(val title: String) {
 }
 
 enum class CallButtonId(val title: String) {
-    MUTE("静音"), SPEAKER("扬声器"), KEYPAD("拨号盘"), SECONDARY_ONE("第二排按钮 1"),
-    SECONDARY_TWO("第二排按钮 2"), SECONDARY_THREE("第二排按钮 3"), HANGUP("挂断")
+    MUTE("静音"), SPEAKER("扬声器"), KEYPAD("拨号盘"), RECORD("录音"), HOLD("保持"),
+    ADD_CALL("添加通话"), VIDEO_CALL("视频通话"), AI_CALL_ASSISTANT("AI 通话助手"), HANGUP("挂断")
 }
 
 /** Per-element layout and paint settings used by both the editor and call screen. */
@@ -57,9 +57,6 @@ data class CallStatusRule(
     val soundEntryId: String? = null,
     val playSoundOnce: Boolean = false,
     val soundMuted: Boolean = false,
-    val callerName: String = "",
-    val callerNumber: String = "",
-    val locationText: String = "",
     val callerNameStyle: CallVisualStyle = CallVisualStyle(),
     val callerNumberStyle: CallVisualStyle = CallVisualStyle(),
     val locationTextStyle: CallVisualStyle = CallVisualStyle(),
@@ -88,17 +85,15 @@ data class CallSessionSetup(
 
 fun defaultButtons(stage: CallStage): List<CallButtonRule> {
     val outgoing = stage == CallStage.DIALING || stage == CallStage.WAITING
+    val active = stage == CallStage.ACTIVE || stage == CallStage.HOLD
     return CallButtonId.entries.map { id ->
-        val visible = when (id) {
-            CallButtonId.SECONDARY_ONE, CallButtonId.SECONDARY_TWO, CallButtonId.SECONDARY_THREE -> true
-            else -> true
-        }
-        CallButtonRule(id = id, visible = visible, enabled = when (id) {
-            CallButtonId.MUTE, CallButtonId.KEYPAD -> stage == CallStage.ACTIVE
+        CallButtonRule(id = id, visible = true, enabled = when (id) {
+            CallButtonId.MUTE, CallButtonId.KEYPAD -> active
             CallButtonId.SPEAKER -> stage !in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)
-            CallButtonId.SECONDARY_ONE -> if (outgoing) true else stage == CallStage.ACTIVE || stage == CallStage.HOLD
-            CallButtonId.SECONDARY_TWO -> if (outgoing) true else stage == CallStage.ACTIVE
-            CallButtonId.SECONDARY_THREE -> outgoing
+            CallButtonId.RECORD -> stage == CallStage.ACTIVE
+            CallButtonId.ADD_CALL, CallButtonId.AI_CALL_ASSISTANT -> active
+            CallButtonId.HOLD -> active || outgoing
+            CallButtonId.VIDEO_CALL -> active || outgoing
             CallButtonId.HANGUP -> stage !in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)
         })
     }

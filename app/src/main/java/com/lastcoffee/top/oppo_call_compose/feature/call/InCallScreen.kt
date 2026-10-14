@@ -37,21 +37,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.Dialpad
-import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.VideoCall
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -72,11 +63,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -85,6 +80,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import com.lastcoffee.top.oppo_call_compose.R
 import com.lastcoffee.top.oppo_call_compose.data.demoCalls
 import com.lastcoffee.top.oppo_call_compose.data.demoContacts
 import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
@@ -98,6 +94,8 @@ import com.lastcoffee.top.oppo_call_compose.model.ManualCall
 import com.lastcoffee.top.oppo_call_compose.ui.common.InCallButtonBackground
 import com.lastcoffee.top.oppo_call_compose.ui.common.InCallEndRed
 import com.lastcoffee.top.oppo_call_compose.ui.common.InCallSelectedBackground
+import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
+import com.lastcoffee.top.oppo_call_compose.ui.theme.OPPO_Call_ComposeTheme
 import kotlinx.coroutines.delay
 
 private enum class CallSessionState {
@@ -142,8 +140,8 @@ internal fun InCallScreen(
     var ringbackVideoError by remember { mutableStateOf(false) }
     var callOutcome by remember(number) { mutableStateOf(initialRule.outcome?.let { value -> CallOutcome.entries.firstOrNull { it.name == value } }) }
     var outcomeCycle by remember(number) { mutableIntStateOf(0) }
-    var outgoingMenuVisible by remember { mutableStateOf(false) }
-    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    val isPreview = LocalInspectionMode.current
+    val videoPicker = if (isPreview) null else rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val persisted = runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -159,12 +157,12 @@ internal fun InCallScreen(
     }
     val hangupPhrase = remember(context) { runCatching { voiceHangupPhrase(context) }.getOrDefault("语音口令") }
     var microphoneGranted by remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+        mutableStateOf(isPreview || ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
     }
     var permissionRequested by remember { mutableStateOf(false) }
     var voiceListening by remember { mutableStateOf(false) }
     var voiceFailed by remember { mutableStateOf(false) }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    val permissionLauncher = if (isPreview) null else rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         microphoneGranted = granted
     }
     val lifecycleOwner = context as? LifecycleOwner
@@ -172,9 +170,9 @@ internal fun InCallScreen(
     val contact = remember(number) { demoContacts.firstOrNull { it.number == number } }
     val callRecord = remember(number) { demoCalls.firstOrNull { it.description == number } }
     val activeRule = configuration.statuses.firstOrNull { it.id == activeStatusId } ?: initialRule
-    val displayName = activeRule.callerName.takeIf { it.isNotBlank() } ?: contact?.name ?: callRecord?.number ?: number
-    val displayNumber = activeRule.callerNumber.takeIf { it.isNotBlank() } ?: contact?.number ?: if (callRecord != null) number else null
-    val location = activeRule.locationText.takeIf { it.isNotBlank() } ?: contact?.location ?: if (callRecord != null) "紧急号码" else "未知归属地"
+    val displayName = contact?.name ?: callRecord?.number ?: number
+    val displayNumber = contact?.number ?: if (callRecord != null) number else null
+    val location = contact?.location ?: if (callRecord != null) "紧急号码" else "未知归属地"
     val mediaForMode = remember(mode, mediaEntries) { mediaEntries.filter { it.mode == mode && mode.acceptsMimeType(it.mimeType) && File(it.filePath).exists() } }
     val currentMedia = remember(activeStatusId, activeRule.mediaEntryId, activeRule.playSoundOnce, mediaForMode, mediaEntries) {
         if (activeRule.playSoundOnce) null
@@ -222,7 +220,6 @@ internal fun InCallScreen(
 
     fun playOutcome(outcome: CallOutcome) {
         if (callState == CallSessionState.DIALING || callState == CallSessionState.WAITING_FOR_ANSWER) {
-            outgoingMenuVisible = false
             callOutcome = outcome
             outcomeCycle = 0
             val outcomeRule = configuration.statuses.firstOrNull { it.outcome == outcome.name }
@@ -297,14 +294,14 @@ internal fun InCallScreen(
             connectedAt = SystemClock.elapsedRealtime()
             elapsedSeconds = 0
         }
-        if (callState == CallSessionState.ACTIVE && !microphoneGranted && !permissionRequested) {
+        if (!isPreview && callState == CallSessionState.ACTIVE && !microphoneGranted && !permissionRequested) {
             permissionRequested = true
-            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            permissionLauncher?.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
     DisposableEffect(callState, microphoneGranted, isResumed) {
-        if (callState == CallSessionState.ACTIVE && microphoneGranted && isResumed) {
+        if (!isPreview && callState == CallSessionState.ACTIVE && microphoneGranted && isResumed) {
             voiceFailed = false
             val detector = VoiceHangupDetector(
                 context = context.applicationContext,
@@ -454,11 +451,11 @@ internal fun InCallScreen(
                 // rather than centering it above the caller information.
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        if (activeRule.callerNameStyle.visible) Text(displayName, color = activeRule.callerNameStyle.textColor(Color.White), fontSize = activeRule.callerNameStyle.fontSizeSp?.sp ?: 32.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.offset(activeRule.callerNameStyle.offsetXdp.dp, activeRule.callerNameStyle.offsetYdp.dp).background(activeRule.callerNameStyle.backgroundColorArgb?.let { Color(it.toULong()) } ?: Color.Transparent, RoundedCornerShape(3.dp)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(displayName, color = activeRule.callerNameStyle.textColor(Color.White), fontSize = activeRule.callerNameStyle.fontSizeSp?.sp ?: 32.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         displayNumber?.let {
-                            if (activeRule.callerNumberStyle.visible) Text(it, color = activeRule.callerNumberStyle.textColor(Color.White), fontSize = activeRule.callerNumberStyle.fontSizeSp?.sp ?: 16.sp, modifier = Modifier.padding(top = 4.dp).offset(activeRule.callerNumberStyle.offsetXdp.dp, activeRule.callerNumberStyle.offsetYdp.dp).background(activeRule.callerNumberStyle.backgroundColorArgb?.let { color -> Color(color.toULong()) } ?: Color.Transparent, RoundedCornerShape(3.dp)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(it, color = activeRule.callerNumberStyle.textColor(Color.White), fontSize = activeRule.callerNumberStyle.fontSizeSp?.sp ?: 16.sp, modifier = Modifier.padding(top = 4.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        if (activeRule.locationTextStyle.visible) Text(location, color = activeRule.locationTextStyle.textColor(Color(0x99FFFFFF)), fontSize = activeRule.locationTextStyle.fontSizeSp?.sp ?: 14.sp, modifier = Modifier.padding(top = 3.dp).offset(activeRule.locationTextStyle.offsetXdp.dp, activeRule.locationTextStyle.offsetYdp.dp).background(activeRule.locationTextStyle.backgroundColorArgb?.let { Color(it.toULong()) } ?: Color.Transparent, RoundedCornerShape(3.dp)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(location, color = activeRule.locationTextStyle.textColor(Color(0x99FFFFFF)), fontSize = activeRule.locationTextStyle.fontSizeSp?.sp ?: 14.sp, modifier = Modifier.padding(top = 3.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Box(
                         modifier = Modifier.padding(start = 16.dp).size(70.dp).clip(CircleShape).background(Color(0xFF535353)),
@@ -493,7 +490,7 @@ internal fun InCallScreen(
                 }
                 if (callState == CallSessionState.ACTIVE) {
                     if (!microphoneGranted) {
-                        TextButton(onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }) {
+                        TextButton(onClick = { permissionLauncher?.launch(Manifest.permission.RECORD_AUDIO) }) {
                             Text("开启语音挂断", color = Color(0xFFB5E8B8))
                         }
                     } else {
@@ -515,54 +512,108 @@ internal fun InCallScreen(
                 InCallDtmfPad(digits = dtmfDigits, onDigit = { dtmfDigits += it }, onClose = { dialpadOpen = false })
             } else {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        ruleFor(CallButtonId.MUTE).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "静音", Icons.Filled.MicOff, muted, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.MUTE) { muted = !muted } } }
-                        ruleFor(CallButtonId.SPEAKER).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "扬声器", Icons.Filled.VolumeUp, speakerOn, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.SPEAKER) { speakerOn = !speakerOn } } }
-                        ruleFor(CallButtonId.KEYPAD).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "拨号盘", Icons.Filled.Dialpad, false, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.KEYPAD) { dtmfDigits = ""; dialpadOpen = true } } }
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                            if (!outgoingRow) {
+                                ruleFor(CallButtonId.RECORD).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "录音", painterResource(R.drawable.incall_btn_record_call), recording, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.RECORD) { recording = !recording } } }
+                            } else {
+                                ruleFor(CallButtonId.MUTE).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "静音", painterResource(R.drawable.incall_btn_mute_call), muted, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.MUTE) { muted = !muted } } }
+                            }
+                        }
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                            if (!outgoingRow) {
+                                ruleFor(CallButtonId.HOLD).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "保持", painterResource(R.drawable.incall_btn_hold_call), callState == CallSessionState.ON_HOLD, enabled = rule.enabled, visualStyle = rule.visualStyle) {
+                                    onConfiguredButton(CallButtonId.HOLD) {
+                                        val targetStage = if (callState == CallSessionState.ACTIVE) CallStage.HOLD else CallStage.ACTIVE
+                                        configuration.statuses.firstOrNull { it.stage == targetStage }?.let { transitionToStatus(it.id) }
+                                    }
+                                } }
+                            } else {
+                                ruleFor(CallButtonId.HOLD).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "暂停", painterResource(R.drawable.incall_btn_hold_call), false, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.HOLD) { playOutcome(CallOutcome.NO_ANSWER) } } }
+                            }
+                        }
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                            if (!outgoingRow) {
+                                ruleFor(CallButtonId.ADD_CALL).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "添加通话", painterResource(R.drawable.incall_btn_add_call), false, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.ADD_CALL) { } } }
+                            } else {
+                                ruleFor(CallButtonId.VIDEO_CALL).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "视频", painterResource(R.drawable.incall_btn_change_to_video), false, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.VIDEO_CALL) { playOutcome(CallOutcome.BUSY) } } }
+                            }
+                        }
                     }
                     Spacer(modifier = Modifier.height(20.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        if (outgoingRow) {
-                            ruleFor(CallButtonId.SECONDARY_ONE).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "暂停", Icons.Filled.Pause, false, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.SECONDARY_ONE) { playOutcome(CallOutcome.NO_ANSWER) } } }
-                            ruleFor(CallButtonId.SECONDARY_TWO).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "视频", Icons.Filled.VideoCall, false, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.SECONDARY_TWO) { playOutcome(CallOutcome.BUSY) } } }
-                            ruleFor(CallButtonId.SECONDARY_THREE).takeIf { it.visible }?.let { rule ->
-                                Box {
-                                    InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "更多", Icons.Filled.MoreVert, false, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.SECONDARY_THREE) { outgoingMenuVisible = true } }
-                                    DropdownMenu(expanded = outgoingMenuVisible, onDismissRequest = { outgoingMenuVisible = false }) {
-                                        DropdownMenuItem(text = { Text("选择彩铃视频") }, onClick = { outgoingMenuVisible = false; videoPicker.launch(arrayOf("video/*")) })
-                                        if (ringbackVideoUri != null) DropdownMenuItem(text = { Text("移除彩铃视频") }, onClick = { outgoingMenuVisible = false; ringbackPrefs.edit().remove("ringback_video_uri").apply(); ringbackVideoUri = null; ringbackVideoError = false })
-                                        DropdownMenuItem(text = { Text("空号") }, onClick = { playOutcome(CallOutcome.EMPTY_NUMBER) })
-                                        DropdownMenuItem(text = { Text("关机") }, onClick = { playOutcome(CallOutcome.POWERED_OFF) })
-                                    }
-                                }
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                            if (!outgoingRow) {
+                                ruleFor(CallButtonId.MUTE).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "静音", painterResource(R.drawable.incall_btn_mute_call), muted, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.MUTE) { muted = !muted } } }
                             }
-                        } else {
-                            ruleFor(CallButtonId.SECONDARY_ONE).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "保持", Icons.Filled.Pause, callState == CallSessionState.ON_HOLD, enabled = rule.enabled, visualStyle = rule.visualStyle) {
-                                onConfiguredButton(CallButtonId.SECONDARY_ONE) {
-                                    val targetStage = if (callState == CallSessionState.ACTIVE) CallStage.HOLD else CallStage.ACTIVE
-                                    configuration.statuses.firstOrNull { it.stage == targetStage }?.let { transitionToStatus(it.id) }
-                                }
-                            } }
-                            ruleFor(CallButtonId.SECONDARY_TWO).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "录音", Icons.Filled.FiberManualRecord, recording, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.SECONDARY_TWO) { recording = !recording } } }
-                            ruleFor(CallButtonId.SECONDARY_THREE).takeIf { it.visible }?.let { rule -> InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "添加通话", Icons.Filled.Call, false, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.SECONDARY_THREE) { } } }
+                        }
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                            if (!outgoingRow) {
+                                val rule = ruleFor(CallButtonId.VIDEO_CALL)
+                                if (rule.visible) InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "视频通话", painterResource(R.drawable.incall_btn_change_to_video), false, enabled = rule.enabled, visualStyle = rule.visualStyle) { onConfiguredButton(CallButtonId.VIDEO_CALL) { } }
+                            }
+                        }
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                            if (!outgoingRow && (callState == CallSessionState.ACTIVE || callState == CallSessionState.ON_HOLD)) {
+                                val rule = ruleFor(CallButtonId.AI_CALL_ASSISTANT)
+                                if (rule.visible) InCallAction(rule.label?.takeIf { it.isNotBlank() } ?: "AI 通话助手", painterResource(R.drawable.incall_btn_call_assistant), false, enabled = rule.enabled, visualStyle = rule.visualStyle, iconSizeDp = 68, tintIcon = false) { onConfiguredButton(CallButtonId.AI_CALL_ASSISTANT) { } }
+                            }
                         }
                     }
                 }
             }
+            val speakerRule = ruleFor(CallButtonId.SPEAKER)
             val hangupRule = ruleFor(CallButtonId.HANGUP)
-            if (hangupRule.visible) Column(
-                modifier = Modifier.padding(top = 30.dp, bottom = 20.dp).offset(hangupRule.visualStyle.offsetXdp.dp, hangupRule.visualStyle.offsetYdp.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+            val keypadRule = ruleFor(CallButtonId.KEYPAD)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp),
+                verticalAlignment = Alignment.Top,
             ) {
-                val enabled = hangupRule.enabled && canHangUp
-                IconButton(
-                    onClick = { onConfiguredButton(CallButtonId.HANGUP, ::requestHangup) },
-                    enabled = enabled,
-                    modifier = Modifier.size(70.dp).clip(CircleShape).background(hangupRule.visualStyle.backgroundColorArgb?.let { Color(it.toULong()) } ?: if (enabled) InCallEndRed else InCallButtonBackground),
-                ) {
-                    Icon(Icons.Filled.CallEnd, contentDescription = hangupRule.label?.takeIf { it.isNotBlank() } ?: "挂断", tint = hangupRule.visualStyle.textColor(if (enabled) Color.White else Color(0x66FFFFFF)), modifier = Modifier.size(36.dp))
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                    if (speakerRule.visible) InCallAction(
+                        speakerRule.label?.takeIf { it.isNotBlank() } ?: "扬声器",
+                        painterResource(R.drawable.incall_btn_audiomode_speaker),
+                        speakerOn,
+                        enabled = speakerRule.enabled,
+                        visualStyle = speakerRule.visualStyle,
+                    ) { onConfiguredButton(CallButtonId.SPEAKER) { speakerOn = !speakerOn } }
                 }
-                Text(hangupRule.label?.takeIf { it.isNotBlank() } ?: "挂断", color = hangupRule.visualStyle.textColor(if (enabled) Color.White else Color(0x66FFFFFF)), fontSize = hangupRule.visualStyle.fontSizeSp?.sp ?: 12.sp, modifier = Modifier.padding(top = 6.dp))
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                    if (hangupRule.visible) Column(
+                        modifier = Modifier.offset(hangupRule.visualStyle.offsetXdp.dp, hangupRule.visualStyle.offsetYdp.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        val enabled = hangupRule.enabled && canHangUp
+                        IconButton(
+                            onClick = { onConfiguredButton(CallButtonId.HANGUP, ::requestHangup) },
+                            enabled = enabled,
+                            modifier = Modifier.size(70.dp).clip(CircleShape).background(hangupRule.visualStyle.backgroundColorArgb?.let { Color(it.toULong()) } ?: if (enabled) InCallEndRed else InCallButtonBackground),
+                        ) {
+                            if (hangupRule.visualStyle.backgroundColorArgb == null && hangupRule.visualStyle.textColorArgb == null) {
+                                Image(painterResource(R.drawable.incall_btn_reject), contentDescription = hangupRule.label?.takeIf { it.isNotBlank() } ?: "挂断", modifier = Modifier.size(68.dp), alpha = if (enabled) 1f else 0.4f)
+                            } else {
+                                Icon(Icons.Filled.CallEnd, contentDescription = hangupRule.label?.takeIf { it.isNotBlank() } ?: "挂断", tint = hangupRule.visualStyle.textColor(if (enabled) Color.White else Color(0x66FFFFFF)), modifier = Modifier.size(36.dp))
+                            }
+                        }
+                        Text(hangupRule.label?.takeIf { it.isNotBlank() } ?: "挂断", color = hangupRule.visualStyle.textColor(if (enabled) Color.White else Color(0x66FFFFFF)), fontSize = hangupRule.visualStyle.fontSizeSp?.sp ?: 12.sp, modifier = Modifier.padding(top = 6.dp))
+                    }
+                }
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                    if (keypadRule.visible) InCallAction(
+                        keypadRule.label?.takeIf { it.isNotBlank() } ?: "拨号盘",
+                        painterResource(R.drawable.incall_btn_dialpad),
+                        dialpadOpen,
+                        enabled = keypadRule.enabled,
+                        visualStyle = keypadRule.visualStyle,
+                    ) {
+                        onConfiguredButton(CallButtonId.KEYPAD) {
+                            if (dialpadOpen) dialpadOpen = false else {
+                                dtmfDigits = ""
+                                dialpadOpen = true
+                            }
+                        }
+                    }
+                }
             }
         }
       }
@@ -591,13 +642,13 @@ private fun RingbackVideo(uri: Uri, onError: () -> Unit) {
 }
 
 @Composable
-private fun InCallAction(label: String, icon: ImageVector, selected: Boolean, enabled: Boolean, visualStyle: CallVisualStyle = CallVisualStyle(), onClick: () -> Unit) {
+private fun InCallAction(label: String, icon: Painter?, selected: Boolean, enabled: Boolean, visualStyle: CallVisualStyle = CallVisualStyle(), iconSizeDp: Int = 36, tintIcon: Boolean = true, onClick: () -> Unit) {
     Column(modifier = Modifier.width(88.dp).offset(visualStyle.offsetXdp.dp, visualStyle.offsetYdp.dp).clickable(enabled = enabled, onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier.size(66.dp).clip(CircleShape).background(visualStyle.backgroundColorArgb?.let { Color(it.toULong()) } ?: if (enabled && selected) InCallSelectedBackground else InCallButtonBackground),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = label, modifier = Modifier.size(36.dp), tint = visualStyle.textColor(if (!enabled) Color(0x66FFFFFF) else if (selected) Color.Black else Color.White))
+            if (icon != null) Image(icon, contentDescription = label, modifier = Modifier.size(iconSizeDp.dp), colorFilter = if (tintIcon) ColorFilter.tint(visualStyle.textColor(if (!enabled) Color(0x66FFFFFF) else if (selected) Color.Black else Color.White)) else null)
         }
         Text(label, color = visualStyle.textColor(if (enabled) Color.White else Color(0x66FFFFFF)), fontSize = visualStyle.fontSizeSp?.sp ?: 12.sp, modifier = Modifier.padding(top = 6.dp), textAlign = TextAlign.Center)
     }
@@ -621,5 +672,25 @@ private fun InCallDtmfPad(digits: String, onDigit: (String) -> Unit, onClose: ()
             }
         }
         Text("收起拨号键盘", color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp).clickable(onClick = onClose))
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF25282D, widthDp = 540, heightDp = 1176)
+@Composable
+private fun InCallScreenPreview() {
+    val statuses = remember {
+        defaultCallStatuses().map { status ->
+            if (status.id == "active") status.copy(durationSeconds = 0) else status
+        }
+    }
+    OPPO_Call_ComposeTheme(darkTheme = true, dynamicColor = false) {
+        InCallScreen(
+            number = "19136066659",
+            mode = CallAudioMode.DEFAULT_TONE,
+            initialStatusId = "active",
+            configuration = CallFlowConfiguration(initialStatusId = "active", statuses = statuses),
+            mediaEntries = emptyList(),
+            onCallFinished = {},
+        )
     }
 }

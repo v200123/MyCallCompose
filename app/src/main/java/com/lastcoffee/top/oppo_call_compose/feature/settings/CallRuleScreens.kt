@@ -69,14 +69,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lastcoffee.top.oppo_call_compose.data.CallNumberPoolEntity
+import com.lastcoffee.top.oppo_call_compose.R
 import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
 import com.lastcoffee.top.oppo_call_compose.model.CallButtonId
 import com.lastcoffee.top.oppo_call_compose.model.CallButtonRule
@@ -190,12 +195,9 @@ private fun StatusEditorDialog(
     var soundEntryId by remember(initial) { mutableStateOf(initial.soundEntryId) }
     var playSoundOnce by remember(initial) { mutableStateOf(initial.playSoundOnce) }
     var soundMuted by remember(initial) { mutableStateOf(initial.soundMuted) }
-    var callerName by remember(initial) { mutableStateOf(initial.callerName) }
-    var callerNumber by remember(initial) { mutableStateOf(initial.callerNumber) }
-    var locationText by remember(initial) { mutableStateOf(initial.locationText) }
-    var callerNameStyle by remember(initial) { mutableStateOf(initial.callerNameStyle) }
-    var callerNumberStyle by remember(initial) { mutableStateOf(initial.callerNumberStyle) }
-    var locationTextStyle by remember(initial) { mutableStateOf(initial.locationTextStyle) }
+    var callerNameStyle by remember(initial) { mutableStateOf(initial.callerNameStyle.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)) }
+    var callerNumberStyle by remember(initial) { mutableStateOf(initial.callerNumberStyle.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)) }
+    var locationTextStyle by remember(initial) { mutableStateOf(initial.locationTextStyle.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)) }
     var statusTextStyle by remember(initial) { mutableStateOf(initial.statusTextStyle) }
     var visualEditorVisible by remember(initial) { mutableStateOf(false) }
     val context = LocalContext.current
@@ -296,16 +298,16 @@ private fun StatusEditorDialog(
         },
         confirmButton = { TextButton(onClick = {
             val normalizedButtons = CallButtonId.entries.map { id -> buttons.firstOrNull { it.id == id } ?: CallButtonRule(id) }
-            onApply(initial.copy(name = name.ifBlank { "未命名状态" }, stage = stage, durationSeconds = duration.toIntOrNull()?.coerceIn(0, 86_400) ?: 0, timeoutTargetId = timeoutTarget, buttons = normalizedButtons, mediaEntryId = mediaEntryId, soundEntryId = soundEntryId, playSoundOnce = playSoundOnce, soundMuted = soundMuted, callerName = callerName, callerNumber = callerNumber, locationText = locationText, callerNameStyle = callerNameStyle, callerNumberStyle = callerNumberStyle, locationTextStyle = locationTextStyle, statusTextStyle = statusTextStyle))
+            onApply(initial.copy(name = name.ifBlank { "未命名状态" }, stage = stage, durationSeconds = duration.toIntOrNull()?.coerceIn(0, 86_400) ?: 0, timeoutTargetId = timeoutTarget, buttons = normalizedButtons, mediaEntryId = mediaEntryId, soundEntryId = soundEntryId, playSoundOnce = playSoundOnce, soundMuted = soundMuted, callerNameStyle = callerNameStyle, callerNumberStyle = callerNumberStyle, locationTextStyle = locationTextStyle, statusTextStyle = statusTextStyle))
         }) { Text("保存") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
     if (visualEditorVisible) {
         CallScreenVisualEditor(
             statusName = name,
-            callerName = callerName,
-            callerNumber = callerNumber,
-            locationText = locationText,
+            callerName = "联系人姓名",
+            callerNumber = "138 0013 8000",
+            locationText = "未知归属地",
             callerNameStyle = callerNameStyle,
             callerNumberStyle = callerNumberStyle,
             locationTextStyle = locationTextStyle,
@@ -315,9 +317,9 @@ private fun StatusEditorDialog(
             statuses = statuses.filterNot { it.id == initial.id },
             onTextChange = { element, value, style ->
                 when (element) {
-                    CallTextElement.CALLER_NAME -> { callerName = value; callerNameStyle = style }
-                    CallTextElement.CALLER_NUMBER -> { callerNumber = value; callerNumberStyle = style }
-                    CallTextElement.LOCATION -> { locationText = value; locationTextStyle = style }
+                    CallTextElement.CALLER_NAME -> callerNameStyle = style.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)
+                    CallTextElement.CALLER_NUMBER -> callerNumberStyle = style.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)
+                    CallTextElement.LOCATION -> locationTextStyle = style.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)
                     CallTextElement.STATUS -> { name = value; statusTextStyle = style }
                 }
             },
@@ -380,6 +382,11 @@ private fun CallScreenVisualEditor(
         val defaultColor = if (element == CallTextElement.LOCATION) Color(0x99FFFFFF) else Color.White
         CallVisualElementDialog(
             title = label, text = value, style = style, defaultColor = defaultColor,
+            editableText = element == CallTextElement.STATUS,
+            allowPosition = element !in setOf(CallTextElement.CALLER_NAME, CallTextElement.CALLER_NUMBER, CallTextElement.LOCATION),
+            allowBackgroundColor = element !in setOf(CallTextElement.CALLER_NAME, CallTextElement.CALLER_NUMBER, CallTextElement.LOCATION),
+            allowVisibility = element !in setOf(CallTextElement.CALLER_NAME, CallTextElement.CALLER_NUMBER, CallTextElement.LOCATION),
+            defaultFontSizeSp = when (element) { CallTextElement.CALLER_NAME -> 32f; CallTextElement.CALLER_NUMBER -> 16f; CallTextElement.LOCATION -> 14f; CallTextElement.STATUS -> 18f },
             onDismiss = { editingText = null },
             onSave = { updatedText, updatedStyle, _, _, _ -> onTextChange(element, updatedText, updatedStyle); editingText = null },
         )
@@ -387,7 +394,8 @@ private fun CallScreenVisualEditor(
     if (currentRule != null) {
         CallVisualElementDialog(
             title = currentRule.label?.takeIf { it.isNotBlank() } ?: buttonDefaultLabel(currentRule.id, stage),
-            text = currentRule.label?.takeIf { it.isNotBlank() } ?: buttonDefaultLabel(currentRule.id, stage), style = currentRule.visualStyle, defaultColor = Color.White,
+            text = currentRule.label?.takeIf { it.isNotBlank() } ?: buttonDefaultLabel(currentRule.id, stage), style = currentRule.visualStyle, defaultColor = if (currentRule.enabled) Color.White else Color(0x66FFFFFF),
+            defaultFontSizeSp = 12f,
             visible = currentRule.visible, enabled = currentRule.enabled, targetStatusId = currentRule.targetStatusId,
             statuses = statuses, buttonId = currentRule.id,
             onDismiss = { editingButton = null },
@@ -398,28 +406,54 @@ private fun CallScreenVisualEditor(
 
 @Composable
 private fun CallScreenButtonCanvas(stage: CallStage, buttons: List<CallButtonRule>, onSelect: (CallButtonId) -> Unit) {
-    val outgoing = stage == CallStage.DIALING || stage == CallStage.WAITING
     val indexedRules = CallButtonId.entries.associateWith { id -> buttons.firstOrNull { it.id == id } ?: CallButtonRule(id) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        val iconById = mapOf(
-            CallButtonId.MUTE to Icons.Filled.MicOff,
-            CallButtonId.SPEAKER to Icons.Filled.VolumeUp,
-            CallButtonId.KEYPAD to Icons.Filled.Dialpad,
-            CallButtonId.SECONDARY_ONE to Icons.Filled.Pause,
-            CallButtonId.SECONDARY_TWO to if (outgoing) Icons.Filled.VideoCall else Icons.Filled.FiberManualRecord,
-            CallButtonId.SECONDARY_THREE to if (outgoing) Icons.Filled.MoreVert else Icons.Filled.Call,
+        val functionRows = listOf(
+            listOf(CallButtonId.RECORD, CallButtonId.HOLD, CallButtonId.ADD_CALL),
+            listOf(CallButtonId.MUTE, CallButtonId.VIDEO_CALL, CallButtonId.AI_CALL_ASSISTANT),
         )
-        listOf(CallButtonId.entries.take(3), CallButtonId.entries.subList(3, 6)).forEach { rowIds ->
-            Row(Modifier.fillMaxWidth().padding(top = if (rowIds.first() == CallButtonId.MUTE) 0.dp else 20.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+        functionRows.forEachIndexed { index, rowIds ->
+            Row(Modifier.fillMaxWidth().padding(top = if (index == 0) 0.dp else 20.dp)) {
                 rowIds.forEach { id ->
-                    val rule = indexedRules.getValue(id)
-                    val defaultLabel = buttonDefaultLabel(id, stage)
-                    InCallEditorButton(rule, defaultLabel, iconById.getValue(id)) { onSelect(id) }
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                        val (painter, size, tint) = when (id) {
+                            CallButtonId.RECORD -> Triple(painterResource(R.drawable.incall_btn_record_call), 36, true)
+                            CallButtonId.HOLD -> Triple(painterResource(R.drawable.incall_btn_hold_call), 36, true)
+                            CallButtonId.ADD_CALL -> Triple(painterResource(R.drawable.incall_btn_add_call), 36, true)
+                            CallButtonId.MUTE -> Triple(painterResource(R.drawable.incall_btn_mute_call), 36, true)
+                            CallButtonId.VIDEO_CALL -> Triple(painterResource(R.drawable.incall_btn_change_to_video), 36, true)
+                            CallButtonId.AI_CALL_ASSISTANT -> Triple(painterResource(R.drawable.incall_btn_call_assistant), 68, false)
+                            else -> Triple(null, 36, true)
+                        }
+                        val rule = indexedRules.getValue(id)
+                        InCallEditorButton(
+                            rule = rule,
+                            defaultLabel = buttonDefaultLabel(id, stage),
+                            iconPainter = painter,
+                            iconSizeDp = size,
+                            tintPainter = tint,
+                        ) { onSelect(id) }
+                    }
                 }
             }
         }
-        val hangup = indexedRules.getValue(CallButtonId.HANGUP)
-        InCallEditorButton(hangup, "挂断", Icons.Filled.CallEnd, hangup = true, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 30.dp, bottom = 20.dp)) { onSelect(CallButtonId.HANGUP) }
+        Row(Modifier.fillMaxWidth().padding(top = 30.dp, bottom = 20.dp), verticalAlignment = Alignment.Top) {
+            listOf(CallButtonId.SPEAKER, CallButtonId.HANGUP, CallButtonId.KEYPAD).forEach { id ->
+                Box(Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                    val rule = indexedRules.getValue(id)
+                    val icon = when (id) {
+                        CallButtonId.SPEAKER -> painterResource(R.drawable.incall_btn_audiomode_speaker)
+                        CallButtonId.KEYPAD -> painterResource(R.drawable.incall_btn_dialpad)
+                        else -> null
+                    }
+                    if (id == CallButtonId.HANGUP) {
+                        InCallEditorButton(rule, "挂断", Icons.Filled.CallEnd, hangup = true) { onSelect(id) }
+                    } else {
+                        InCallEditorButton(rule, buttonDefaultLabel(id, stage), iconPainter = icon) { onSelect(id) }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -431,9 +465,11 @@ private fun buttonDefaultLabel(id: CallButtonId, stage: CallStage): String {
         CallButtonId.MUTE -> "静音"
         CallButtonId.SPEAKER -> "扬声器"
         CallButtonId.KEYPAD -> "拨号盘"
-        CallButtonId.SECONDARY_ONE -> if (outgoing) "暂停" else "保持"
-        CallButtonId.SECONDARY_TWO -> if (outgoing) "视频" else "录音"
-        CallButtonId.SECONDARY_THREE -> if (outgoing) "更多" else "添加通话"
+        CallButtonId.RECORD -> "录音"
+        CallButtonId.HOLD -> "保持"
+        CallButtonId.ADD_CALL -> "添加通话"
+        CallButtonId.VIDEO_CALL -> "视频通话"
+        CallButtonId.AI_CALL_ASSISTANT -> "AI 通话助手"
         CallButtonId.HANGUP -> "挂断"
     }
 }
@@ -447,12 +483,14 @@ private fun EditableCallText(value: String, style: CallVisualStyle, defaultSize:
 }
 
 @Composable
-private fun InCallEditorButton(rule: CallButtonRule, defaultLabel: String, icon: androidx.compose.ui.graphics.vector.ImageVector, hangup: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun InCallEditorButton(rule: CallButtonRule, defaultLabel: String, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, hangup: Boolean = false, modifier: Modifier = Modifier, iconPainter: Painter? = null, iconSizeDp: Int = 36, tintPainter: Boolean = true, onClick: () -> Unit) {
     val style = rule.visualStyle
     val label = rule.label?.takeIf { it.isNotBlank() } ?: defaultLabel
     Column(modifier.width(88.dp).offset(style.offsetXdp.dp, style.offsetYdp.dp).clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(if (hangup) 70.dp else 66.dp).clip(CircleShape).background(style.backgroundColorArgb?.let { Color(it.toULong()) } ?: if (hangup && rule.enabled) Color(0xFFE74D4D) else Color(0x29999999)), contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = label, tint = style.textColorArgb?.let { Color(it.toULong()) } ?: if (rule.enabled) Color.White else Color(0x66FFFFFF), modifier = Modifier.size(36.dp))
+            val tint = style.textColorArgb?.let { Color(it.toULong()) } ?: if (rule.enabled) Color.White else Color(0x66FFFFFF)
+            if (iconPainter != null) Image(iconPainter, contentDescription = label, modifier = Modifier.size(iconSizeDp.dp), colorFilter = if (tintPainter) ColorFilter.tint(tint) else null)
+            else if (icon != null) Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(36.dp))
             if (!rule.visible) Text("隐藏", color = Color.White, fontSize = 9.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp))
         }
         Text(label, color = style.textColorArgb?.let { Color(it.toULong()) } ?: if (rule.enabled) Color.White else Color(0x66FFFFFF), fontSize = style.fontSizeSp?.sp ?: 12.sp, modifier = Modifier.padding(top = 6.dp), textAlign = TextAlign.Center, maxLines = 1)
@@ -465,6 +503,11 @@ private fun CallVisualElementDialog(
     text: String,
     style: CallVisualStyle,
     defaultColor: Color,
+    editableText: Boolean = true,
+    allowPosition: Boolean = true,
+    allowBackgroundColor: Boolean = true,
+    allowVisibility: Boolean = true,
+    defaultFontSizeSp: Float = 12f,
     visible: Boolean = style.visible,
     enabled: Boolean? = null,
     targetStatusId: String? = null,
@@ -474,10 +517,10 @@ private fun CallVisualElementDialog(
     onSave: (String, CallVisualStyle, Boolean, Boolean, String?) -> Unit,
 ) {
     var editedText by remember(title, text) { mutableStateOf(text) }
-    var fontSize by remember(title, style.fontSizeSp) { mutableStateOf(style.fontSizeSp?.toString().orEmpty()) }
+    var fontSize by remember(title, style.fontSizeSp, defaultFontSizeSp) { mutableStateOf((style.fontSizeSp ?: defaultFontSizeSp).toString()) }
     var x by remember(title, style.offsetXdp) { mutableStateOf(style.offsetXdp.toString()) }
     var y by remember(title, style.offsetYdp) { mutableStateOf(style.offsetYdp.toString()) }
-    var textColor by remember(title, style.textColorArgb) { mutableStateOf(style.textColorArgb?.toString(16)?.uppercase().orEmpty()) }
+    var textColor by remember(title, style.textColorArgb, defaultColor) { mutableStateOf(style.textColorArgb?.let { java.lang.Long.toHexString(it).uppercase().takeLast(8) } ?: Integer.toHexString(defaultColor.toArgb()).uppercase().padStart(8, '0')) }
     var backgroundColor by remember(title, style.backgroundColorArgb) { mutableStateOf(style.backgroundColorArgb?.toString(16)?.uppercase().orEmpty()) }
     var isVisible by remember(title, visible) { mutableStateOf(visible) }
     var isEnabled by remember(title, enabled) { mutableStateOf(enabled ?: true) }
@@ -488,12 +531,12 @@ private fun CallVisualElementDialog(
         title = { Text("编辑$title") },
         text = {
             LazyColumn {
-                item { OutlinedTextField(editedText, { editedText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(if (buttonId == null) "显示文字" else "按钮文字") }, singleLine = true) }
-                item { Row { OutlinedTextField(x, { x = it.filter { c -> c == '-' || c.isDigit() }.take(4) }, modifier = Modifier.weight(1f), label = { Text("横向位置 dp") }, singleLine = true); OutlinedTextField(y, { y = it.filter { c -> c == '-' || c.isDigit() }.take(4) }, modifier = Modifier.weight(1f), label = { Text("纵向位置 dp") }, singleLine = true) } }
+                if (editableText) item { OutlinedTextField(editedText, { editedText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(if (buttonId == null) "显示文字" else "按钮文字") }, singleLine = true) }
+                if (allowPosition) item { Row { OutlinedTextField(x, { x = it.filter { c -> c == '-' || c.isDigit() }.take(4) }, modifier = Modifier.weight(1f), label = { Text("横向位置 dp") }, singleLine = true); OutlinedTextField(y, { y = it.filter { c -> c == '-' || c.isDigit() }.take(4) }, modifier = Modifier.weight(1f), label = { Text("纵向位置 dp") }, singleLine = true) } }
                 item { OutlinedTextField(fontSize, { fontSize = it.filter { c -> c.isDigit() || c == '.' }.take(5) }, modifier = Modifier.fillMaxWidth(), label = { Text("字体大小 sp（留空默认 ${if (buttonId == null) "" else "12"}）") }, singleLine = true) }
                 item { OutlinedTextField(textColor, { textColor = it.removePrefix("#").filter { c -> c.isDigit() || c.lowercaseChar() in 'a'..'f' }.take(8) }, modifier = Modifier.fillMaxWidth(), label = { Text("文字颜色 ARGB（留空默认）") }, singleLine = true) }
-                item { OutlinedTextField(backgroundColor, { backgroundColor = it.removePrefix("#").filter { c -> c.isDigit() || c.lowercaseChar() in 'a'..'f' }.take(8) }, modifier = Modifier.fillMaxWidth(), label = { Text("背景颜色 ARGB（留空默认）") }, singleLine = true) }
-                item { Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(isVisible, { isVisible = it }); Text("显示") ; if (buttonId != null) { Checkbox(isEnabled, { isEnabled = it }); Text("启用") } } }
+                if (allowBackgroundColor) item { OutlinedTextField(backgroundColor, { backgroundColor = it.removePrefix("#").filter { c -> c.isDigit() || c.lowercaseChar() in 'a'..'f' }.take(8) }, modifier = Modifier.fillMaxWidth(), label = { Text("背景颜色 ARGB（留空默认）") }, singleLine = true) }
+                if (allowVisibility || buttonId != null) item { Row(verticalAlignment = Alignment.CenterVertically) { if (allowVisibility) { Checkbox(isVisible, { isVisible = it }); Text("显示") }; if (buttonId != null) { Checkbox(isEnabled, { isEnabled = it }); Text("启用") } } }
                 if (buttonId != null) item {
                     Box {
                         TextButton(onClick = { targetMenu = true }) { Text("点击后：${statuses.firstOrNull { it.id == target }?.name ?: "执行原动作"}") }
@@ -509,8 +552,8 @@ private fun CallVisualElementDialog(
             fun colorValue(raw: String): Long? = raw.trim().removePrefix("#").takeIf { it.isNotBlank() }?.let { value ->
                 value.toLongOrNull(16)?.let { if (value.length <= 6) (it or 0xFF000000L) else it }
             }
-            val updated = style.copy(offsetXdp = x.toIntOrNull()?.coerceIn(-300, 300) ?: 0, offsetYdp = y.toIntOrNull()?.coerceIn(-300, 300) ?: 0, fontSizeSp = fontSize.toFloatOrNull()?.coerceIn(6f, 96f), textColorArgb = colorValue(textColor), backgroundColorArgb = colorValue(backgroundColor), visible = isVisible)
-            onSave(editedText, updated, isVisible, isEnabled, target)
+            val updated = style.copy(offsetXdp = if (allowPosition) x.toIntOrNull()?.coerceIn(-300, 300) ?: 0 else 0, offsetYdp = if (allowPosition) y.toIntOrNull()?.coerceIn(-300, 300) ?: 0 else 0, fontSizeSp = fontSize.toFloatOrNull()?.coerceIn(6f, 96f), textColorArgb = colorValue(textColor), backgroundColorArgb = if (allowBackgroundColor) colorValue(backgroundColor) else null, visible = if (allowVisibility) isVisible else true)
+            onSave(editedText, updated, if (allowVisibility) isVisible else true, isEnabled, target)
         }) { Text("应用") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )

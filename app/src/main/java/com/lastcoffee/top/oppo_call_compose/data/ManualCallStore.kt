@@ -180,9 +180,6 @@ private fun encodeConfiguration(config: CallFlowConfiguration): String = JSONObj
             put("soundEntryId", status.soundEntryId ?: JSONObject.NULL)
             put("playSoundOnce", status.playSoundOnce)
             put("soundMuted", status.soundMuted)
-            put("callerName", status.callerName)
-            put("callerNumber", status.callerNumber)
-            put("locationText", status.locationText)
             put("callerNameStyle", status.callerNameStyle.toJson())
             put("callerNumberStyle", status.callerNumberStyle.toJson())
             put("locationTextStyle", status.locationTextStyle.toJson())
@@ -208,7 +205,13 @@ private fun decodeConfiguration(raw: String): CallFlowConfiguration = runCatchin
             val buttons = buildList {
                 for (j in 0 until buttonsJson.length()) {
                     val button = buttonsJson.optJSONObject(j) ?: continue
-                    val id = CallButtonId.entries.firstOrNull { it.name == button.optString("id") } ?: continue
+                    val storedId = button.optString("id")
+                    val id = when (storedId) {
+                        "SECONDARY_ONE" -> CallButtonId.HOLD
+                        "SECONDARY_TWO" -> if (stage == CallStage.DIALING || stage == CallStage.WAITING) CallButtonId.VIDEO_CALL else CallButtonId.RECORD
+                        "SECONDARY_THREE" -> CallButtonId.ADD_CALL
+                        else -> CallButtonId.entries.firstOrNull { it.name == storedId } ?: continue
+                    }
                     add(CallButtonRule(id, button.optBoolean("visible", true), button.optBoolean("enabled", true), button.optString("targetStatusId").takeIf { it.isNotBlank() && it != "null" }, button.optString("label").takeIf { it.isNotBlank() && it != "null" }, button.optJSONObject("visualStyle")?.toVisualStyle() ?: CallVisualStyle()))
                 }
             }.ifEmpty { com.lastcoffee.top.oppo_call_compose.model.defaultButtons(stage) }
@@ -220,9 +223,6 @@ private fun decodeConfiguration(raw: String): CallFlowConfiguration = runCatchin
                 soundEntryId = item.optString("soundEntryId").takeIf { it.isNotBlank() && it != "null" },
                 playSoundOnce = item.optBoolean("playSoundOnce", false),
                 soundMuted = item.optBoolean("soundMuted", false),
-                callerName = item.optString("callerName", ""),
-                callerNumber = item.optString("callerNumber", ""),
-                locationText = item.optString("locationText", ""),
                 callerNameStyle = item.optJSONObject("callerNameStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 callerNumberStyle = item.optJSONObject("callerNumberStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 locationTextStyle = item.optJSONObject("locationTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
