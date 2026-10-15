@@ -91,9 +91,8 @@ import com.lastcoffee.top.oppo_call_compose.model.CallStage
 import com.lastcoffee.top.oppo_call_compose.model.CallVisualStyle
 import com.lastcoffee.top.oppo_call_compose.model.CallKind
 import com.lastcoffee.top.oppo_call_compose.model.ManualCall
-import com.lastcoffee.top.oppo_call_compose.ui.common.InCallButtonBackground
-import com.lastcoffee.top.oppo_call_compose.ui.common.InCallEndRed
-import com.lastcoffee.top.oppo_call_compose.ui.common.InCallSelectedBackground
+import com.lastcoffee.top.oppo_call_compose.ui.common.InCallButtonSurface
+import com.lastcoffee.top.oppo_call_compose.ui.common.InCallPreviewBackdrop
 import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
 import com.lastcoffee.top.oppo_call_compose.ui.theme.OPPO_Call_ComposeTheme
 import kotlinx.coroutines.delay
@@ -428,6 +427,7 @@ internal fun InCallScreen(
         drawContent()
     }) {
       Box(modifier = Modifier.fillMaxSize()) {
+        if (LocalInspectionMode.current) InCallPreviewBackdrop()
         val videoSource = currentMedia?.takeIf { it.mimeType.startsWith("video/") }?.filePath?.let { Uri.fromFile(File(it)) }
             ?: ringbackVideoUri?.takeIf { !activeRule.playSoundOnce && currentMedia == null && mode == CallAudioMode.RINGBACK && isOutgoing }
         if (isResumed && videoSource != null && !ringbackVideoError) {
@@ -587,7 +587,7 @@ internal fun InCallScreen(
                         IconButton(
                             onClick = { onConfiguredButton(CallButtonId.HANGUP, ::requestHangup) },
                             enabled = enabled,
-                            modifier = Modifier.size(70.dp).clip(CircleShape).background(hangupRule.visualStyle.backgroundColorArgb?.let { Color(it.toULong()) } ?: if (enabled) InCallEndRed else InCallButtonBackground),
+                            modifier = Modifier.size(70.dp),
                         ) {
                             if (hangupRule.visualStyle.backgroundColorArgb == null && hangupRule.visualStyle.textColorArgb == null) {
                                 Image(painterResource(R.drawable.incall_btn_reject), contentDescription = hangupRule.label?.takeIf { it.isNotBlank() } ?: "挂断", modifier = Modifier.size(68.dp), alpha = if (enabled) 1f else 0.4f)
@@ -644,9 +644,9 @@ private fun RingbackVideo(uri: Uri, onError: () -> Unit) {
 @Composable
 private fun InCallAction(label: String, icon: Painter?, selected: Boolean, enabled: Boolean, visualStyle: CallVisualStyle = CallVisualStyle(), iconSizeDp: Int = 36, tintIcon: Boolean = true, onClick: () -> Unit) {
     Column(modifier = Modifier.width(88.dp).offset(visualStyle.offsetXdp.dp, visualStyle.offsetYdp.dp).clickable(enabled = enabled, onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier.size(66.dp).clip(CircleShape).background(visualStyle.backgroundColorArgb?.let { Color(it.toULong()) } ?: if (enabled && selected) InCallSelectedBackground else InCallButtonBackground),
-            contentAlignment = Alignment.Center,
+        InCallButtonSurface(
+            selected = enabled && selected,
+            customColor = visualStyle.backgroundColorArgb?.let { Color(it.toULong()) },
         ) {
             if (icon != null) Image(icon, contentDescription = label, modifier = Modifier.size(iconSizeDp.dp), colorFilter = if (tintIcon) ColorFilter.tint(visualStyle.textColor(if (!enabled) Color(0x66FFFFFF) else if (selected) Color.Black else Color.White)) else null)
         }

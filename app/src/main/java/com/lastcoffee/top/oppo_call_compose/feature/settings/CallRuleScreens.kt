@@ -91,6 +91,9 @@ import com.lastcoffee.top.oppo_call_compose.model.CallStage
 import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
 import com.lastcoffee.top.oppo_call_compose.model.CallVisualStyle
 import com.lastcoffee.top.oppo_call_compose.model.defaultButtons
+import com.lastcoffee.top.oppo_call_compose.ui.common.InCallButtonSurface
+import com.lastcoffee.top.oppo_call_compose.ui.common.InCallEndRed
+import com.lastcoffee.top.oppo_call_compose.ui.common.InCallPreviewBackdrop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -352,6 +355,7 @@ private fun CallScreenVisualEditor(
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = Color(0xFF26313D)) {
             Box(Modifier.fillMaxSize()) {
+                InCallPreviewBackdrop()
                 Column(Modifier.fillMaxSize().padding(WindowInsets.statusBars.asPaddingValues()).padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())) {
                     Column(Modifier.fillMaxWidth().weight(1f).padding(start = 16.dp, end = 16.dp, top = 92.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -487,7 +491,10 @@ private fun InCallEditorButton(rule: CallButtonRule, defaultLabel: String, icon:
     val style = rule.visualStyle
     val label = rule.label?.takeIf { it.isNotBlank() } ?: defaultLabel
     Column(modifier.width(88.dp).offset(style.offsetXdp.dp, style.offsetYdp.dp).clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(if (hangup) 70.dp else 66.dp).clip(CircleShape).background(style.backgroundColorArgb?.let { Color(it.toULong()) } ?: if (hangup && rule.enabled) Color(0xFFE74D4D) else Color(0x29999999)), contentAlignment = Alignment.Center) {
+        InCallButtonSurface(
+            diameter = if (hangup) 70.dp else 66.dp,
+            customColor = style.backgroundColorArgb?.let { Color(it.toULong()) } ?: if (hangup) InCallEndRed else null,
+        ) {
             val tint = style.textColorArgb?.let { Color(it.toULong()) } ?: if (rule.enabled) Color.White else Color(0x66FFFFFF)
             if (iconPainter != null) Image(iconPainter, contentDescription = label, modifier = Modifier.size(iconSizeDp.dp), colorFilter = if (tintPainter) ColorFilter.tint(tint) else null)
             else if (icon != null) Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(36.dp))
