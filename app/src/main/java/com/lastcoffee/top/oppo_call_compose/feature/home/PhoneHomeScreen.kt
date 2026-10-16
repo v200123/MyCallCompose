@@ -388,12 +388,12 @@ private fun CallList(
 
 @Composable
 private fun CallRow(record: CallRecord, onInfo: () -> Unit) {
-    val primaryColor = if (record.kind == CallKind.MISSED) MissedRed else Color(0xFF171717)
+    val primaryColor = if (record.isUnanswered) MissedRed else Color(0xFF171717)
     Row(modifier = Modifier.fillMaxWidth().padding(start = 21.dp), verticalAlignment = Alignment.Top) {
         Icon(
             record.kind.icon,
             contentDescription = null,
-            tint = if (record.kind == CallKind.MISSED) MissedRed else SecondaryText,
+            tint = if (record.isUnanswered) MissedRed else SecondaryText,
             modifier = Modifier.padding(top = 14.dp).size(16.dp),
         )
         Column(modifier = Modifier.weight(1f).padding(start = 12.dp, top = 10.dp, end = 2.dp, bottom = 8.dp)) {

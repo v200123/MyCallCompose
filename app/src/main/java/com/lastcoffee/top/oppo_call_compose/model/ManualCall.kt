@@ -16,9 +16,9 @@ data class ManualCall(
     fun toCallRecord(): CallRecord {
         val time = Instant.ofEpochMilli(timeMillis).atZone(ZoneId.systemDefault())
         val type = kind.displayLabel()
-        val detail = if (kind == CallKind.MISSED || kind == CallKind.BLOCKED ||
+        val isUnanswered = kind == CallKind.MISSED || kind == CallKind.BLOCKED ||
             (kind == CallKind.OUTGOING && !wasConnected)
-        ) "未接通" else formatCallDuration(durationSeconds)
+        val detail = if (isUnanswered) "未接通" else formatCallDuration(durationSeconds)
         return CallRecord(
             number = number,
             description = "$type  $detail",
@@ -27,6 +27,7 @@ data class ManualCall(
             detailTime = time.format(DateTimeFormatter.ofPattern("yyyy/M/d HH:mm")),
             durationDetail = "$type  $detail",
             storedId = id,
+            isUnanswered = isUnanswered,
         )
     }
 }
