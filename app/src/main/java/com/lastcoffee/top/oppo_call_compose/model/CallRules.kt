@@ -81,6 +81,7 @@ data class CallMediaEntry(
 data class CallSessionSetup(
     val mode: CallAudioMode,
     val initialStatusId: String,
+    val configuration: CallFlowConfiguration,
 )
 
 fun defaultButtons(stage: CallStage): List<CallButtonRule> {
@@ -106,6 +107,7 @@ fun defaultCallStatuses(): List<CallStatusRule> = listOf(
     CallStatusRule("busy", "对方忙线", CallStage.OUTCOME, 5, "disconnecting", outcome = "BUSY"),
     CallStatusRule("empty_number", "空号", CallStage.OUTCOME, 10, "disconnecting", outcome = "EMPTY_NUMBER"),
     CallStatusRule("powered_off", "对方已关机", CallStage.OUTCOME, 10, "disconnecting", outcome = "POWERED_OFF"),
+    CallStatusRule("unreachable", "无法接通", CallStage.OUTCOME, 10, "disconnecting", outcome = "UNREACHABLE"),
     CallStatusRule("active", "通话中", CallStage.ACTIVE),
     CallStatusRule("hold", "保持", CallStage.HOLD),
     CallStatusRule("disconnecting", "正在挂断", CallStage.DISCONNECTING, 1, "disconnected"),

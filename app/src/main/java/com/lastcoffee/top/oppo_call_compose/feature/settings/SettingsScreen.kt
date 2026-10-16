@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -27,14 +29,24 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lastcoffee.top.oppo_call_compose.data.CallPromptType
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onAddCallRecord: () -> Unit, onOpenCallRules: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onAddCallRecord: () -> Unit,
+    onOpenCallRules: () -> Unit,
+    onOpenLocations: () -> Unit,
+    onOpenRingback: () -> Unit,
+    onOpenAutoHangUp: () -> Unit,
+    onOpenPromptNumbers: (CallPromptType) -> Unit,
+) {
     Surface(color = Color(0xFFF1F2F5), modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxSize()
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
-                .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
+                .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
+                .verticalScroll(rememberScrollState()),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp),
@@ -65,6 +77,48 @@ fun SettingsScreen(onBack: () -> Unit, onAddCallRecord: () -> Unit, onOpenCallRu
             ) {
                 Text("添加通话记录", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp)
+                    .background(Color.White, RoundedCornerShape(20.dp))
+                    .clickable(onClick = onOpenLocations)
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("号码归属地", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp)
+                    .background(Color.White, RoundedCornerShape(20.dp))
+                    .clickable(onClick = onOpenRingback)
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("彩铃设置", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 16.dp)
+                    .background(Color.White, RoundedCornerShape(20.dp))
+                    .clickable(onClick = onOpenAutoHangUp)
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("自动挂断号码", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
+            }
+            CallPromptType.entries.forEach { type ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                        .background(Color.White, RoundedCornerShape(20.dp))
+                        .clickable { onOpenPromptNumbers(type) }
+                        .padding(horizontal = 20.dp, vertical = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(type.title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
+                }
             }
         }
     }

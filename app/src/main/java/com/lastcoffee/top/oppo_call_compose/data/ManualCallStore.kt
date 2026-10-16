@@ -52,7 +52,14 @@ class ManualCallStore(context: Context) {
 
     suspend fun configuration(): CallFlowConfiguration = configurationMutex.withLock {
         val saved = dao.getCallConfiguration()
-        if (saved != null) decodeConfiguration(saved.content) else {
+        if (saved != null) {
+            val config = decodeConfiguration(saved.content)
+            val missingUnreachable = config.statuses.none { it.id == "unreachable" }
+            if (missingUnreachable) {
+                config.copy(statuses = config.statuses + defaultCallStatuses().first { it.id == "unreachable" })
+                    .also { dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(it))) }
+            } else config
+        } else {
             val defaults = CallFlowConfiguration()
             dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(defaults)))
             defaults
@@ -74,14 +81,17 @@ class ManualCallStore(context: Context) {
         dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(normalized)))
     }
 
-    suspend fun prepareCall(number: String): CallSessionSetup {
+    suspend fun prepareCall(number: String, preferredStatusId: String? = null, forceDialing: Boolean = false): CallSessionSetup {
         val config = configuration()
         val normalizedNumber = number.filter { it.isDigit() || it == '+' }
         val existing = dao.getNumberPool(normalizedNumber)
         val mode = existing?.let { CallAudioMode.fromStored(it.mode) } ?: config.selectedAudioMode.also {
             dao.saveNumberPool(CallNumberPoolEntity(number = normalizedNumber, mode = it.name))
         }
-        return CallSessionSetup(mode, config.initialStatusId)
+        val entryStatusId = if (forceDialing) {
+            config.statuses.firstOrNull { it.stage == CallStage.DIALING }?.id ?: config.initialStatusId
+        } else preferredStatusId?.takeIf { id -> config.statuses.any { it.id == id } } ?: config.initialStatusId
+        return CallSessionSetup(mode, entryStatusId, config)
     }
 
     suspend fun addMedia(entry: CallMediaEntry) {
@@ -96,6 +106,22 @@ class ManualCallStore(context: Context) {
 
     suspend fun updateNumberMode(number: String, mode: CallAudioMode) {
         dao.saveNumberPool(CallNumberPoolEntity(number = number.filter { it.isDigit() || it == '+' }, mode = mode.name))
+    }
+
+    suspend fun addNumberToPool(number: String) {
+        val normalized = normalizePhoneNumber(number)
+        if (normalized.length !in 3..20) return
+        if (dao.getAllNumberPools().none { normalizePhoneNumber(it.number) == normalized }) {
+            dao.saveNumberPool(CallNumberPoolEntity(normalized, configuration().selectedAudioMode.name))
+        }
+    }
+
+    suspend fun ensureConfiguredNumbers(numbers: Set<String>) {
+        val existing = dao.getAllNumberPools().map { normalizePhoneNumber(it.number) }.toMutableSet()
+        val defaultMode = configuration().selectedAudioMode.name
+        numbers.map(::normalizePhoneNumber).filter { it.length in 3..20 }.distinct().forEach { number ->
+            if (existing.add(number)) dao.saveNumberPool(CallNumberPoolEntity(number, defaultMode))
+        }
     }
 
     suspend fun add(call: ManualCall) {
@@ -311,6 +337,9 @@ interface ManualCallDao {
 
     @Query("SELECT * FROM call_number_pools ORDER BY number")
     fun observeNumberPools(): Flow<List<CallNumberPoolEntity>>
+
+    @Query("SELECT * FROM call_number_pools")
+    suspend fun getAllNumberPools(): List<CallNumberPoolEntity>
 
     @Query("SELECT * FROM call_number_pools WHERE number = :number LIMIT 1")
     suspend fun getNumberPool(number: String): CallNumberPoolEntity?

@@ -24,6 +24,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
 import com.lastcoffee.top.oppo_call_compose.data.ManualCallStore
+import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
+import com.lastcoffee.top.oppo_call_compose.data.PhoneAttributionStore
+import com.lastcoffee.top.oppo_call_compose.data.mobileForLookup
+import com.lastcoffee.top.oppo_call_compose.data.RingbackBadgeStore
 import com.lastcoffee.top.oppo_call_compose.data.demoCalls
 import com.lastcoffee.top.oppo_call_compose.feature.call.CallDetailScreen
 import com.lastcoffee.top.oppo_call_compose.feature.call.InCallScreen
@@ -36,6 +40,14 @@ import com.lastcoffee.top.oppo_call_compose.feature.settings.CallModeSettingsScr
 import com.lastcoffee.top.oppo_call_compose.feature.settings.CallNumberPoolsScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.CallRulesScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.SettingsScreen
+import com.lastcoffee.top.oppo_call_compose.feature.settings.CustomLocationsScreen
+import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackSettingsScreen
+import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackBadgeRulesScreen
+import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackBadgeEditorScreen
+import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackBadgeBindingsScreen
+import com.lastcoffee.top.oppo_call_compose.feature.settings.AutoHangUpScreen
+import com.lastcoffee.top.oppo_call_compose.feature.settings.CallPromptNumbersScreen
+import com.lastcoffee.top.oppo_call_compose.data.CallPromptType
 import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
 import com.lastcoffee.top.oppo_call_compose.model.CallKind
@@ -47,6 +59,13 @@ import kotlinx.coroutines.launch
 private data object HomeRoute
 private data object SearchRoute
 private data object SettingsRoute
+private data object LocationsRoute
+private data object RingbackSettingsRoute
+private data object AutoHangUpRoute
+private data class CallPromptNumbersRoute(val type: CallPromptType)
+private data object RingbackBadgeRulesRoute
+private data class RingbackBadgeEditorRoute(val ruleId: String)
+private data object RingbackBadgeBindingsRoute
 private data object AddCallRecordRoute
 private data object CallModeSettingsRoute
 private data object CallRulesRoute
@@ -54,31 +73,56 @@ private data object NumberPoolsRoute
 private data class CallMediaRoute(val mode: CallAudioMode)
 private data class CallDetailRoute(val record: CallRecord)
 private data class ContactDetailRoute(val contact: ContactMatch)
-private data class InCallRoute(val number: String, val mode: CallAudioMode, val initialStatusId: String)
+private data class InCallRoute(val number: String, val mode: CallAudioMode, val initialStatusId: String, val configuration: CallFlowConfiguration)
 
 @Composable
 fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
     val context = LocalContext.current
     val manualCallStore = remember(context) { ManualCallStore(context) }
+    val extrasStore = remember(context) { PhoneExtrasStore(context) }
+    val extras by extrasStore.settings.collectAsState()
+    val attributionStore = remember(context) { PhoneAttributionStore(context) }
+    val attributions by attributionStore.locations.collectAsState()
+    val locationFor: (String) -> String? = { number ->
+        extras.locationFor(number) ?: mobileForLookup(number)?.take(7)?.let(attributions::get)
+    }
+    val badgeStore = remember(context) { RingbackBadgeStore(context) }
+    val badgeSettings by badgeStore.settings.collectAsState()
     val manualCalls by manualCallStore.calls.collectAsState(initial = emptyList())
     val hiddenDemoIndexes by manualCallStore.hiddenDemoIndexes.collectAsState(initial = emptyList())
     val callConfiguration by manualCallStore.callConfiguration.collectAsState(initial = CallFlowConfiguration())
-    val mediaEntries by manualCallStore.mediaEntries.collectAsState(initial = emptyList())
     val numberPools by manualCallStore.numberPools.collectAsState(initial = emptyList())
+    val mediaEntries by manualCallStore.mediaEntries.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     val backStack = remember { mutableStateListOf<Any>(HomeRoute) }
     LaunchedEffect(manualCallStore) { manualCallStore.importLegacyRecords(); manualCallStore.configuration() }
+    LaunchedEffect(extras, manualCallStore) { manualCallStore.ensureConfiguredNumbers(extras.configuredNumbers()) }
     val startSimulatedCall: (String) -> Unit = { number ->
         scope.launch {
-            val setup = manualCallStore.prepareCall(number)
-            backStack.add(InCallRoute(number, setup.mode, setup.initialStatusId))
+            val setup = manualCallStore.prepareCall(number, extras.statusFor(number), extras.promptFor(number) != null)
+            backStack.add(InCallRoute(number, setup.mode, setup.initialStatusId, setup.configuration))
         }
     }
     val records = manualCalls.map { it.toCallRecord() } + demoCalls.mapIndexedNotNull { index, record ->
         if (index in hiddenDemoIndexes) null else record.copy(demoIndex = index)
     }
+    LaunchedEffect(records.map { it.number to it.description }, extras.locations) {
+        records.asSequence().filter { it.demoIndex == null }
+            .map { mobileForLookup(it.number) ?: mobileForLookup(it.description) }
+            .filterNotNull().distinct().filter { extras.locationFor(it) == null }
+            .forEach { attributionStore.request(it) }
+    }
     var pendingDialNumber by remember { mutableStateOf<String?>(null) }
     val activeCall = backStack.lastOrNull() as? InCallRoute
+    val visibleNumber = when (val route = backStack.lastOrNull()) {
+        is InCallRoute -> route.number
+        is CallDetailRoute -> mobileForLookup(route.record.number) ?: route.record.description
+        is ContactDetailRoute -> route.contact.number
+        else -> null
+    }
+    LaunchedEffect(visibleNumber, extras.locations) {
+        visibleNumber?.takeIf { extras.locationFor(it) == null }?.let { attributionStore.request(it) }
+    }
 
     if (activeCall != null) {
         // Keep the navigation history intact, but remove NavDisplay from the
@@ -88,8 +132,12 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
             number = activeCall.number,
             mode = activeCall.mode,
             initialStatusId = activeCall.initialStatusId,
-            configuration = callConfiguration,
+            configuration = activeCall.configuration,
             mediaEntries = mediaEntries,
+            extras = extras,
+            resolvedLocation = locationFor(activeCall.number),
+            badgeRule = badgeSettings.ruleFor(activeCall.number),
+            onRingbackStarted = { badgeStore.assignRuleForPhone(it) },
             onCallFinished = { call ->
                 manualCallStore.add(call)
                 backStack.removeLastOrNull()
@@ -103,6 +151,8 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                 entry<HomeRoute> {
                     PhoneHomeScreen(
                         records = records,
+                        locationFor = locationFor,
+                        onLookupLocation = { number -> scope.launch { if (extras.locationFor(number) == null) attributionStore.request(number) } },
                         onShowDetail = { backStack.add(CallDetailRoute(it)) },
                         onShowContact = { backStack.add(ContactDetailRoute(it)) },
                         onStartCall = startSimulatedCall,
@@ -141,7 +191,43 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                         onBack = { backStack.removeLastOrNull() },
                         onAddCallRecord = { backStack.add(AddCallRecordRoute) },
                         onOpenCallRules = { backStack.add(CallModeSettingsRoute) },
+                        onOpenLocations = { backStack.add(LocationsRoute) },
+                        onOpenRingback = { backStack.add(RingbackSettingsRoute) },
+                        onOpenAutoHangUp = { backStack.add(AutoHangUpRoute) },
+                        onOpenPromptNumbers = { backStack.add(CallPromptNumbersRoute(it)) },
                     )
+                }
+                entry<AutoHangUpRoute> {
+                    AutoHangUpScreen(extras, extrasStore, numberPools,
+                        onOpenPools = { backStack.add(NumberPoolsRoute) }, onBack = { backStack.removeLastOrNull() })
+                }
+                entry<CallPromptNumbersRoute> { route ->
+                    CallPromptNumbersScreen(route.type, extras, extrasStore, callConfiguration,
+                        onBack = { backStack.removeLastOrNull() })
+                }
+                entry<LocationsRoute> {
+                    CustomLocationsScreen(extras, extrasStore, onBack = { backStack.removeLastOrNull() })
+                }
+                entry<RingbackSettingsRoute> {
+                    RingbackSettingsScreen(extras, extrasStore, mediaEntries,
+                        onOpenLibrary = { backStack.add(CallMediaRoute(CallAudioMode.RINGBACK)) },
+                        onOpenAudioMode = { backStack.add(CallModeSettingsRoute) },
+                        onOpenBadgeRules = { backStack.add(RingbackBadgeRulesRoute) },
+                        onBack = { backStack.removeLastOrNull() })
+                }
+                entry<RingbackBadgeRulesRoute> {
+                    RingbackBadgeRulesScreen(badgeSettings, badgeStore,
+                        onOpenEditor = { backStack.add(RingbackBadgeEditorRoute(it)) },
+                        onOpenBindings = { backStack.add(RingbackBadgeBindingsRoute) },
+                        onBack = { backStack.removeLastOrNull() })
+                }
+                entry<RingbackBadgeEditorRoute> { route ->
+                    badgeSettings.rules.firstOrNull { it.id == route.ruleId }?.let { rule ->
+                        RingbackBadgeEditorScreen(rule, badgeStore, onBack = { backStack.removeLastOrNull() })
+                    }
+                }
+                entry<RingbackBadgeBindingsRoute> {
+                    RingbackBadgeBindingsScreen(badgeSettings, badgeStore, onBack = { backStack.removeLastOrNull() })
                 }
                 entry<CallModeSettingsRoute> {
                     CallModeSettingsScreen(
@@ -149,12 +235,11 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                         onBack = { backStack.removeLastOrNull() },
                         onSelectMode = { mode -> scope.launch { manualCallStore.saveConfiguration(callConfiguration.copy(selectedAudioMode = mode)) } },
                         onOpenRules = { backStack.add(CallRulesRoute) },
-                        onOpenPools = { backStack.add(NumberPoolsRoute) },
                         onOpenLibrary = { backStack.add(CallMediaRoute(it)) },
                     )
                 }
                 entry<CallRulesRoute> {
-                    CallRulesScreen(callConfiguration, mediaEntries = mediaEntries, onAddMedia = { entry -> manualCallStore.addMedia(entry) }, onBack = { backStack.removeLastOrNull() }, onSave = { updated -> scope.launch { manualCallStore.saveConfiguration(updated) } })
+                    CallRulesScreen(callConfiguration, extras, mediaEntries = mediaEntries, onAddMedia = { entry -> manualCallStore.addMedia(entry) }, onBack = { backStack.removeLastOrNull() }, onSave = { updated -> scope.launch { manualCallStore.saveConfiguration(updated) } })
                 }
                 entry<CallMediaRoute> { route ->
                     CallMediaLibraryScreen(
@@ -162,11 +247,18 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                         onBack = { backStack.removeLastOrNull() },
                         onAdd = { entry -> manualCallStore.addMedia(entry) },
                         onUpdate = { entry -> manualCallStore.addMedia(entry) },
-                        onDelete = { entry -> manualCallStore.deleteMedia(entry.id)?.let { removed -> CallMediaFiles.delete(removed.filePath); CallMediaFiles.delete(removed.iconPath) } },
+                        onDelete = { entry -> manualCallStore.deleteMedia(entry.id)?.let { removed ->
+                            extrasStore.removeMedia(removed.id)
+                            CallMediaFiles.delete(removed.filePath)
+                            CallMediaFiles.delete(removed.iconPath)
+                        } },
                     )
                 }
                 entry<NumberPoolsRoute> {
-                    CallNumberPoolsScreen(numberPools, onBack = { backStack.removeLastOrNull() }, onChangeMode = { number, mode -> scope.launch { manualCallStore.updateNumberMode(number, mode) } })
+                    CallNumberPoolsScreen(numberPools, callConfiguration, extras, extrasStore,
+                        onBack = { backStack.removeLastOrNull() },
+                        onAddNumber = { number -> scope.launch { manualCallStore.addNumberToPool(number) } },
+                        onChangeMode = { number, mode -> scope.launch { manualCallStore.updateNumberMode(number, mode) } })
                 }
                 entry<AddCallRecordRoute> {
                     AddCallRecordScreen(
@@ -187,6 +279,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                     CallDetailScreen(
                         record = route.record,
                         allRecords = records,
+                        customLocation = locationFor(route.record.number) ?: locationFor(route.record.description),
                         onBack = { backStack.removeLastOrNull() },
                         onDial = startSimulatedCall,
                         onEditNumber = { number ->
@@ -208,6 +301,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                     CallDetailScreen(
                         record = CallRecord(route.contact.number, route.contact.location, "", CallKind.OUTGOING),
                         allRecords = records,
+                        customLocation = locationFor(route.contact.number),
                         onBack = { backStack.removeLastOrNull() },
                         onDial = startSimulatedCall,
                         fromContact = true,

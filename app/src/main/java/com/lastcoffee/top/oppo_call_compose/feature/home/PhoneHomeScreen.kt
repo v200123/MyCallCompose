@@ -107,6 +107,8 @@ private enum class PhoneTab(val label: String, val icon: ImageVector) {
 @Composable
 internal fun PhoneHomeScreen(
     records: List<CallRecord>,
+    locationFor: (String) -> String?,
+    onLookupLocation: (String) -> Unit = {},
     onShowDetail: (CallRecord) -> Unit,
     onShowContact: (ContactMatch) -> Unit,
     onStartCall: (String) -> Unit,
@@ -120,6 +122,7 @@ internal fun PhoneHomeScreen(
     var selectedTab by remember { mutableStateOf(PhoneTab.CALLS) }
     var dialPadVisible by remember { mutableStateOf(false) }
     var dialedNumber by remember { mutableStateOf("") }
+    LaunchedEffect(dialedNumber) { onLookupLocation(dialedNumber) }
     LaunchedEffect(pendingDialNumber) {
         if (pendingDialNumber != null) {
             selectedTab = PhoneTab.CALLS
@@ -144,6 +147,7 @@ internal fun PhoneHomeScreen(
                 when (selectedTab) {
                     PhoneTab.CALLS -> CallsScreen(
                         records = records,
+                        locationFor = locationFor,
                         dialPadVisible = dialPadVisible,
                         dialedNumber = dialedNumber,
                         onShowDialPad = { dialPadVisible = true },
@@ -175,6 +179,7 @@ internal fun PhoneHomeScreen(
 @Composable
 private fun CallsScreen(
     records: List<CallRecord>,
+    locationFor: (String) -> String?,
     dialPadVisible: Boolean,
     dialedNumber: String,
     onShowDialPad: () -> Unit,
@@ -240,10 +245,11 @@ private fun CallsScreen(
                 )
             }
             if (dialedNumber.isNotBlank()) {
-                DialSearchResults(number = dialedNumber, onInfo = onShowDetail)
+                DialSearchResults(number = dialedNumber, onInfo = onShowDetail, locationFor = locationFor)
             } else {
                 CallList(
                     records = if (missedOnly) records.filter { it.kind == CallKind.MISSED } else records,
+                    locationFor = locationFor,
                     state = listState,
                     onInfo = onShowDetail,
                     contentBottomPadding = if (dialPadVisible) 370.dp else 72.dp,
@@ -373,6 +379,7 @@ private fun FilterChoice(label: String, selected: Boolean, modifier: Modifier = 
 @Composable
 private fun CallList(
     records: List<CallRecord>,
+    locationFor: (String) -> String?,
     state: androidx.compose.foundation.lazy.LazyListState,
     onInfo: (CallRecord) -> Unit,
     contentBottomPadding: androidx.compose.ui.unit.Dp,
@@ -380,14 +387,14 @@ private fun CallList(
     LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
         item { Spacer(modifier = Modifier.height(8.dp)) }
         items(records) { record ->
-            CallRow(record = record, onInfo = { onInfo(record) })
+            CallRow(record = record, location = locationFor(record.number) ?: locationFor(record.description), onInfo = { onInfo(record) })
         }
         item { Spacer(modifier = Modifier.height(contentBottomPadding)) }
     }
 }
 
 @Composable
-private fun CallRow(record: CallRecord, onInfo: () -> Unit) {
+private fun CallRow(record: CallRecord, location: String?, onInfo: () -> Unit) {
     val primaryColor = if (record.isUnanswered) MissedRed else Color(0xFF171717)
     Row(modifier = Modifier.fillMaxWidth().padding(start = 21.dp), verticalAlignment = Alignment.Top) {
         Icon(
@@ -398,7 +405,7 @@ private fun CallRow(record: CallRecord, onInfo: () -> Unit) {
         )
         Column(modifier = Modifier.weight(1f).padding(start = 12.dp, top = 10.dp, end = 2.dp, bottom = 8.dp)) {
             Text(record.number, color = primaryColor, fontSize = 16.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium)
-            Text(record.description, color = SecondaryText, fontSize = 14.sp, lineHeight = 20.sp)
+            Text(location ?: record.description, color = SecondaryText, fontSize = 14.sp, lineHeight = 20.sp)
             record.tag?.let { Text(it, color = TagOrange, fontSize = 14.sp, lineHeight = 18.sp) }
             HorizontalDivider(color = DividerColor, modifier = Modifier.padding(top = 9.dp))
         }
@@ -410,7 +417,7 @@ private fun CallRow(record: CallRecord, onInfo: () -> Unit) {
 }
 
 @Composable
-private fun DialSearchResults(number: String, onInfo: (CallRecord) -> Unit) {
+private fun DialSearchResults(number: String, onInfo: (CallRecord) -> Unit, locationFor: (String) -> String?) {
     val matches = remember(number) { demoContacts.filter { it.number.contains(number) }.ifEmpty { demoContacts } }
     Column(modifier = Modifier.fillMaxSize()) {
         // dialpad_layout.xml positions paste_and_digit_container 70dp below the dial content top.
@@ -427,7 +434,7 @@ private fun DialSearchResults(number: String, onInfo: (CallRecord) -> Unit) {
                 textAlign = TextAlign.Center,
             )
             Text(
-                "中国大陆",
+                locationFor(number) ?: "中国大陆",
                 color = SecondaryText,
                 fontSize = 12.sp,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 3.dp),
@@ -440,7 +447,7 @@ private fun DialSearchResults(number: String, onInfo: (CallRecord) -> Unit) {
                         Text(contact.name, fontSize = 16.sp, fontWeight = FontWeight.Medium, lineHeight = 21.sp)
                         HighlightedNumber(contact.number, number)
                     }
-                    Text(contact.location, color = SecondaryText, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.width(88.dp), textAlign = TextAlign.End)
+                    Text(locationFor(contact.number) ?: contact.location, color = SecondaryText, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.width(88.dp), textAlign = TextAlign.End)
                     IconButton(onClick = { onInfo(CallRecord(contact.number, contact.location, "联系人", CallKind.INCOMING)) }) {
                         Icon(Icons.Filled.Info, contentDescription = "详情", modifier = Modifier.size(24.dp))
                     }

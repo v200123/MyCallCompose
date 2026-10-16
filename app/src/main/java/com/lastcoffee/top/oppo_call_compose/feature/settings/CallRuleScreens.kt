@@ -81,6 +81,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lastcoffee.top.oppo_call_compose.data.CallNumberPoolEntity
+import com.lastcoffee.top.oppo_call_compose.data.CallPromptType
+import com.lastcoffee.top.oppo_call_compose.data.PhoneExtras
+import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
+import com.lastcoffee.top.oppo_call_compose.data.normalizePhoneNumber
 import com.lastcoffee.top.oppo_call_compose.R
 import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
 import com.lastcoffee.top.oppo_call_compose.model.CallButtonId
@@ -104,7 +108,6 @@ fun CallModeSettingsScreen(
     onBack: () -> Unit,
     onSelectMode: (CallAudioMode) -> Unit,
     onOpenRules: () -> Unit,
-    onOpenPools: () -> Unit,
     onOpenLibrary: (CallAudioMode) -> Unit,
 ) {
     SettingsFrame("通话规则与音频", onBack) {
@@ -121,15 +124,15 @@ fun CallModeSettingsScreen(
             }
         }
         SettingsLink("状态规则", "${config.statuses.size} 个状态", onOpenRules)
-        SettingsLink("号码池", "按铃声模式查看和调整归属", onOpenPools)
     }
 }
 
-private val fixedStageStatusIds = setOf("dialing", "waiting", "no_answer", "busy", "empty_number", "powered_off", "active", "hold", "disconnecting", "disconnected")
+private val fixedStageStatusIds = setOf("dialing", "waiting", "no_answer", "busy", "empty_number", "powered_off", "unreachable", "active", "hold", "disconnecting", "disconnected")
 
 @Composable
 fun CallRulesScreen(
     config: CallFlowConfiguration,
+    extras: PhoneExtras,
     mediaEntries: List<CallMediaEntry>,
     onAddMedia: suspend (CallMediaEntry) -> Unit,
     onBack: () -> Unit,
@@ -144,6 +147,9 @@ fun CallRulesScreen(
         Text("设为入口", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(current.statuses, key = { it.id }) { status ->
+                val categoryCount = extras.promptCategoryRules.values.count { it == status.id }
+                val bindingCount = extras.statusBindings.values.count { it == status.id } +
+                    extras.promptNumbers.keys.count { extras.promptRuleFor(it) == status.id }
                 Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)) {
                     Column(Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -155,13 +161,15 @@ fun CallRulesScreen(
                                 current = current.copy(initialStatusId = status.id); onSave(current)
                             })
                             TextButton(onClick = { editing = status }) { Text("编辑") }
-                            if (status.id !in fixedStageStatusIds) {
+                            if (status.id !in fixedStageStatusIds && bindingCount == 0 && categoryCount == 0) {
                                 IconButton(onClick = {
                                     current = current.copy(statuses = current.statuses.filterNot { it.id == status.id }, initialStatusId = current.initialStatusId.takeUnless { it == status.id } ?: "dialing")
                                     onSave(current)
                                 }) { Icon(Icons.Default.Delete, contentDescription = "删除状态") }
                             }
                         }
+                        if (bindingCount > 0) Text("已绑定 $bindingCount 个号码", color = Color(0xFF707782), fontSize = 12.sp)
+                        if (categoryCount > 0) Text("用于 $categoryCount 类提示音", color = Color(0xFF707782), fontSize = 12.sp)
                         status.timeoutTargetId?.let { target -> Text("到期跳转：${current.statuses.firstOrNull { it.id == target }?.name ?: target}", color = Color(0xFF707782)) }
                     }
                 }
@@ -170,7 +178,9 @@ fun CallRulesScreen(
     }
     editing?.let { status ->
         StatusEditorDialog(
-            initial = status, statuses = current.statuses, mediaEntries = mediaEntries, onAddMedia = onAddMedia, stageEditable = isNew || status.id !in fixedStageStatusIds, onDismiss = { editing = null },
+            initial = status, statuses = current.statuses, mediaEntries = mediaEntries, onAddMedia = onAddMedia,
+            stageEditable = isNew || (status.id !in fixedStageStatusIds && extras.promptCategoryRules.values.none { it == status.id }),
+            onDismiss = { editing = null },
             onApply = { updated ->
                 current = if (isNew) current.copy(statuses = current.statuses + updated) else current.copy(statuses = current.statuses.map { if (it.id == updated.id) updated else it })
                 editing = null; isNew = false; onSave(current)
@@ -632,32 +642,128 @@ fun CallMediaLibraryScreen(
 }
 
 @Composable
-fun CallNumberPoolsScreen(entries: List<CallNumberPoolEntity>, onBack: () -> Unit, onChangeMode: (String, CallAudioMode) -> Unit) {
-    SettingsFrame("号码池", onBack) {
-        if (entries.isEmpty()) Text("号码会在模拟拨号时自动加入当前选择的池。", modifier = Modifier.padding(20.dp), color = Color(0xFF707782))
+fun CallNumberPoolsScreen(
+    entries: List<CallNumberPoolEntity>,
+    config: CallFlowConfiguration,
+    extras: PhoneExtras,
+    extrasStore: PhoneExtrasStore,
+    onBack: () -> Unit,
+    onAddNumber: (String) -> Unit,
+    onChangeMode: (String, CallAudioMode) -> Unit,
+) {
+    var adding by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<CallNumberPoolEntity?>(null) }
+    SettingsFrame("自动操作规则绑定", onBack) {
+        Text("在这里添加号码，并设置提示类型、自动挂断时间等号码行为。每类提示音的规则在对应号码页面统一选择。", modifier = Modifier.padding(16.dp), color = Color(0xFF707782))
+        Button(onClick = { adding = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) { Text("添加号码") }
+        if (entries.isEmpty()) Text("暂无号码", modifier = Modifier.padding(20.dp), color = Color(0xFF707782))
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(entries, key = { it.number }) { entry ->
-                var expanded by remember { mutableStateOf(false) }
-                Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(entry.number, modifier = Modifier.weight(1f))
-                        Box {
-                            TextButton(onClick = { expanded = true }) { Text(CallAudioMode.fromStored(entry.mode).title) }
-                            DropdownMenu(expanded, { expanded = false }) {
-                                CallAudioMode.entries.filter { it != CallAudioMode.STATUS_SOUND }.forEach { mode -> DropdownMenuItem(text = { Text(mode.title) }, onClick = { onChangeMode(entry.number, mode); expanded = false }) }
-                            }
-                        }
+                val status = config.statuses.firstOrNull { it.id == extras.statusFor(entry.number) }?.name
+                val promptType = extras.promptFor(entry.number)
+                val prompt = promptType?.let { type ->
+                    val ruleName = config.statuses.firstOrNull { it.id == extras.promptRuleFor(entry.number) }?.name ?: "规则已删除"
+                    "${type.title.removeSuffix("号码")} → $ruleName"
+                }
+                val auto = extras.autoHangUpSecondsFor(entry.number)
+                Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clickable { editing = entry }) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(entry.number, fontWeight = FontWeight.SemiBold)
+                        Text(listOfNotNull(CallAudioMode.fromStored(entry.mode).title, prompt ?: status,
+                            auto?.let { "接通后 ${it} 秒自动挂断" }).joinToString(" · "), color = Color(0xFF707782), fontSize = 13.sp)
                     }
                 }
             }
         }
     }
+    if (adding) {
+        var raw by remember { mutableStateOf("") }
+        val normalized = normalizePhoneNumber(raw)
+        val valid = normalized.length in 3..20 && entries.none { normalizePhoneNumber(it.number) == normalized }
+        AlertDialog(onDismissRequest = { adding = false }, title = { Text("添加号码到号码池") },
+            text = { Column {
+                OutlinedTextField(raw, { raw = it }, label = { Text("电话号码（3–20 位）") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), singleLine = true)
+                if (raw.isNotBlank() && !valid) Text(if (entries.any { normalizePhoneNumber(it.number) == normalized }) "号码已在号码池中" else "请输入 3–20 位电话号码", color = Color.Red)
+            } },
+            confirmButton = { TextButton(onClick = { onAddNumber(normalized); adding = false }, enabled = valid) { Text("添加") } },
+            dismissButton = { TextButton(onClick = { adding = false }) { Text("取消") } })
+    }
+    editing?.let { entry ->
+        NumberPoolBindingEditor(entry, config, extras, onDismiss = { editing = null }) { mode, statusId, prompt, seconds ->
+            onChangeMode(entry.number, mode)
+            extrasStore.bindStatus(entry.number, if (prompt == null) statusId else null)
+            if (prompt == null) extrasStore.deletePromptNumber(entry.number)
+            else extrasStore.savePromptNumber(entry.number, prompt)
+            if (seconds == null) extrasStore.deleteAutoHangUpRule(entry.number) else extrasStore.saveAutoHangUpRule(entry.number, seconds)
+            editing = null
+        }
+    }
+}
+
+@Composable
+private fun NumberPoolBindingEditor(
+    entry: CallNumberPoolEntity,
+    config: CallFlowConfiguration,
+    extras: PhoneExtras,
+    onDismiss: () -> Unit,
+    onSave: (CallAudioMode, String?, CallPromptType?, Int?) -> Unit,
+) {
+    var mode by remember(entry.number) { mutableStateOf(CallAudioMode.fromStored(entry.mode)) }
+    var statusId by remember(entry.number) { mutableStateOf(extras.statusFor(entry.number)) }
+    var prompt by remember(entry.number) { mutableStateOf(extras.promptFor(entry.number)) }
+    var secondsText by remember(entry.number) { mutableStateOf(extras.autoHangUpSecondsFor(entry.number)?.toString().orEmpty()) }
+    var modeMenu by remember { mutableStateOf(false) }
+    var statusMenu by remember { mutableStateOf(false) }
+    var promptMenu by remember { mutableStateOf(false) }
+    val seconds = secondsText.toIntOrNull()
+    val validSeconds = secondsText.isBlank() || (seconds != null && seconds in 1..3600)
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("配置 ${entry.number}") },
+        text = { Column {
+            Box { TextButton(onClick = { modeMenu = true }) { Text("音频模式：${mode.title}") }
+                DropdownMenu(modeMenu, { modeMenu = false }) {
+                    CallAudioMode.entries.filter { it != CallAudioMode.STATUS_SOUND }.forEach { option ->
+                        DropdownMenuItem(text = { Text(option.title) }, onClick = { mode = option; modeMenu = false })
+                    }
+                }
+            }
+            Box { TextButton(onClick = { statusMenu = true }, enabled = prompt == null) {
+                Text("起始状态：${config.statuses.firstOrNull { it.id == statusId }?.name ?: "使用全局规则"}")
+            }
+                DropdownMenu(statusMenu, { statusMenu = false }) {
+                    DropdownMenuItem(text = { Text("使用全局规则") }, onClick = { statusId = null; statusMenu = false })
+                    config.statuses.forEach { status -> DropdownMenuItem(text = { Text(status.name) }, onClick = { statusId = status.id; statusMenu = false }) }
+                }
+            }
+            Box { TextButton(onClick = { promptMenu = true }) { Text("提示类型：${prompt?.title ?: "无"}") }
+                DropdownMenu(promptMenu, { promptMenu = false }) {
+                    DropdownMenuItem(text = { Text("无") }, onClick = { prompt = null; promptMenu = false })
+                    CallPromptType.entries.forEach { type -> DropdownMenuItem(text = { Text(type.title) }, onClick = {
+                        prompt = type; promptMenu = false
+                    }) }
+                }
+            }
+            if (prompt != null) {
+                val categoryRuleId = extras.promptRuleFor(requireNotNull(prompt))
+                val categoryRuleName = config.statuses.firstOrNull { it.id == categoryRuleId && it.stage == CallStage.OUTCOME }?.name ?: "未设置有效规则"
+                Text("${requireNotNull(prompt).title}统一使用：$categoryRuleName", color = Color.Gray, fontSize = 12.sp)
+            }
+            OutlinedTextField(secondsText, { secondsText = it.filter(Char::isDigit).take(4) },
+                label = { Text("接通后自动挂断秒数（留空关闭）") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
+            if (!validSeconds) Text("请输入 1–3600 秒", color = Color.Red)
+        } },
+        confirmButton = { TextButton(onClick = { onSave(mode, statusId, prompt, seconds) },
+            enabled = validSeconds) { Text("保存绑定") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
 }
 
 @Composable
 private fun SettingsFrame(title: String, onBack: () -> Unit, footer: @Composable (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Surface(color = Color(0xFFF1F2F5), modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()
+            .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
+            .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())) {
             Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.material3.IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
                 Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)

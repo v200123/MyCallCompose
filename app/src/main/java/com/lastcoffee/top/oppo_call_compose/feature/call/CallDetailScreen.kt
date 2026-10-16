@@ -68,6 +68,7 @@ import kotlinx.coroutines.launch
 internal fun CallDetailScreen(
     record: CallRecord,
     allRecords: List<CallRecord>,
+    customLocation: String? = null,
     onBack: () -> Unit,
     onDial: (String) -> Unit,
     onEditNumber: (String) -> Unit = {},
@@ -80,7 +81,7 @@ internal fun CallDetailScreen(
     val number = if (isEmergency) record.description else contact?.number
         ?: record.description.takeIf { it.all(Char::isDigit) } ?: record.number
     val normalizedDescription = record.description.replace("\n", "  ")
-    val location = contact?.location ?: when {
+    val location = customLocation ?: contact?.location ?: when {
         isEmergency -> ""
         record.storedId != null -> "未知归属地"
         record.description.contains("\n") -> record.description.substringAfter("\n").trim()

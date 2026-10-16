@@ -15,6 +15,7 @@ internal enum class CallOutcome(val status: String, val spokenPrompt: String) {
     BUSY("对方通话中", ""),
     EMPTY_NUMBER("对方为空号", "您拨打的号码是空号"),
     POWERED_OFF("对方已关机", "您拨打的号码已关机"),
+    UNREACHABLE("无法接通", "您拨打的电话暂时无法接通"),
 }
 
 /** Plays the local outcome sound and reports completion. It never starts a real phone call. */

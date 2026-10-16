@@ -41,6 +41,7 @@ ksp {
 }
 
 dependencies {
+    implementation("me.ihxq.projects:phone-number-geo:1.0.10-202502")
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -57,7 +58,7 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     testImplementation(libs.junit)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
+//    androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)

@@ -2,7 +2,6 @@ package com.lastcoffee.top.oppo_call_compose.feature.call
 
 import android.Manifest
 import android.app.Activity
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.PixelFormat
 import android.media.AudioManager
@@ -91,6 +90,10 @@ import com.lastcoffee.top.oppo_call_compose.model.CallStage
 import com.lastcoffee.top.oppo_call_compose.model.CallVisualStyle
 import com.lastcoffee.top.oppo_call_compose.model.CallKind
 import com.lastcoffee.top.oppo_call_compose.model.ManualCall
+import com.lastcoffee.top.oppo_call_compose.data.PhoneExtras
+import com.lastcoffee.top.oppo_call_compose.data.CallPromptType
+import com.lastcoffee.top.oppo_call_compose.data.BadgeRule
+import com.lastcoffee.top.oppo_call_compose.data.normalizePhoneNumber
 import com.lastcoffee.top.oppo_call_compose.ui.common.InCallButtonSurface
 import com.lastcoffee.top.oppo_call_compose.ui.common.InCallPreviewBackdrop
 import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
@@ -119,6 +122,10 @@ internal fun InCallScreen(
     initialStatusId: String,
     configuration: CallFlowConfiguration,
     mediaEntries: List<CallMediaEntry>,
+    extras: PhoneExtras = PhoneExtras(),
+    resolvedLocation: String? = null,
+    badgeRule: BadgeRule? = null,
+    onRingbackStarted: (String) -> Unit = {},
     onCallFinished: suspend (ManualCall) -> Unit,
 ) {
     val initialRule = configuration.statuses.firstOrNull { it.id == initialStatusId } ?: configuration.statuses.first()
@@ -132,28 +139,14 @@ internal fun InCallScreen(
     var elapsedSeconds by remember { mutableIntStateOf(0) }
     var connectedAt by remember(number) { mutableStateOf<Long?>(null) }
     val callStartedAtMillis = remember(number) { System.currentTimeMillis() }
+    val callStartedAtElapsed = remember(number) { SystemClock.elapsedRealtime() }
     var durationAtEnd by remember(number) { mutableIntStateOf(0) }
     val context = LocalContext.current
-    val ringbackPrefs = remember(context) { context.getSharedPreferences("call_scenario_media", 0) }
-    var ringbackVideoUri by remember { mutableStateOf(ringbackPrefs.getString("ringback_video_uri", null)?.let(Uri::parse)) }
     var ringbackVideoError by remember { mutableStateOf(false) }
     var callOutcome by remember(number) { mutableStateOf(initialRule.outcome?.let { value -> CallOutcome.entries.firstOrNull { it.name == value } }) }
+    var promptPlaying by remember(number) { mutableStateOf(false) }
     var outcomeCycle by remember(number) { mutableIntStateOf(0) }
     val isPreview = LocalInspectionMode.current
-    val videoPicker = if (isPreview) null else rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            val persisted = runCatching {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }.isSuccess
-            if (persisted) {
-                ringbackPrefs.edit().putString("ringback_video_uri", uri.toString()).apply()
-                ringbackVideoError = false
-                ringbackVideoUri = uri
-            } else {
-                ringbackVideoError = true
-            }
-        }
-    }
     val hangupPhrase = remember(context) { runCatching { voiceHangupPhrase(context) }.getOrDefault("语音口令") }
     var microphoneGranted by remember {
         mutableStateOf(isPreview || ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
@@ -169,22 +162,50 @@ internal fun InCallScreen(
     val contact = remember(number) { demoContacts.firstOrNull { it.number == number } }
     val callRecord = remember(number) { demoCalls.firstOrNull { it.description == number } }
     val activeRule = configuration.statuses.firstOrNull { it.id == activeStatusId } ?: initialRule
+    val configuredPromptType = extras.promptFor(number)
+    val promptRuleId = configuredPromptType?.let(extras::promptRuleFor)
+    val promptTargetRule = promptRuleId?.let { selectedId ->
+        configuration.statuses.firstOrNull { it.id == selectedId && it.stage == CallStage.OUTCOME }
+    } ?: configuration.statuses.firstOrNull { it.id == configuredPromptType?.legacyStatusId && it.stage == CallStage.OUTCOME }
+    val promptType = configuredPromptType
+    val promptRuleActive = promptPlaying &&
+        (activeStatusId == promptTargetRule?.id || (promptTargetRule == null && callState == CallSessionState.PLAYING_OUTCOME))
     val displayName = contact?.name ?: callRecord?.number ?: number
     val displayNumber = contact?.number ?: if (callRecord != null) number else null
-    val location = contact?.location ?: if (callRecord != null) "紧急号码" else "未知归属地"
+    val location = extras.locationFor(number) ?: resolvedLocation ?: contact?.location ?: if (callRecord != null) "紧急号码" else "未知归属地"
     val mediaForMode = remember(mode, mediaEntries) { mediaEntries.filter { it.mode == mode && mode.acceptsMimeType(it.mimeType) && File(it.filePath).exists() } }
-    val currentMedia = remember(activeStatusId, activeRule.mediaEntryId, activeRule.playSoundOnce, mediaForMode, mediaEntries) {
-        if (activeRule.playSoundOnce) null
-        else mediaEntries.firstOrNull { it.id == activeRule.mediaEntryId && it.mode != CallAudioMode.STATUS_SOUND && it.mode.acceptsMimeType(it.mimeType) && File(it.filePath).exists() }
-            ?: mediaForMode.randomOrNull()
+    val ringbackVideos = remember(mediaEntries) { mediaEntries.filter { it.mode == CallAudioMode.RINGBACK && it.mimeType.startsWith("video/") && File(it.filePath).isFile } }
+    val randomRingbackId = remember(number, ringbackVideos) { ringbackVideos.randomOrNull()?.id }
+    val currentMedia = remember(activeStatusId, activeRule.mediaEntryId, activeRule.playSoundOnce, mediaForMode, mediaEntries, extras, number, randomRingbackId, callState, promptPlaying) {
+        if (activeRule.playSoundOnce || (promptType != null && (callState == CallSessionState.DIALING || callState == CallSessionState.WAITING_FOR_ANSWER))) null
+        else if (promptRuleActive) mediaEntries.firstOrNull {
+            it.id == activeRule.mediaEntryId && (it.mimeType.startsWith("audio/") || it.mimeType.startsWith("video/")) && File(it.filePath).isFile
+        }
+        else if (activeRule.stage in setOf(CallStage.DIALING, CallStage.WAITING) &&
+            (mode == CallAudioMode.RINGBACK || extras.ringbackBindings.containsKey(normalizePhoneNumber(number)))) {
+            val selected = if (extras.blocksRingback(number)) null else {
+                val boundId = extras.ringbackBindings[normalizePhoneNumber(number)]
+                boundId?.let { id -> ringbackVideos.firstOrNull { it.id == id } }
+                    ?: if (mode == CallAudioMode.RINGBACK) {
+                        extras.defaultRingbackId?.let { id -> ringbackVideos.firstOrNull { it.id == id } }
+                            ?: randomRingbackId?.let { id -> ringbackVideos.firstOrNull { it.id == id } }
+                    } else null
+            }
+            selected ?: mediaEntries.firstOrNull { it.mode == CallAudioMode.DEFAULT_TONE && it.mimeType.startsWith("audio/") && File(it.filePath).isFile }
+        } else {
+            mediaEntries.firstOrNull { it.id == activeRule.mediaEntryId && it.mode != CallAudioMode.STATUS_SOUND && it.mode.acceptsMimeType(it.mimeType) && File(it.filePath).isFile && (!extras.blocksRingback(number) || !it.mimeType.startsWith("video/")) }
+                ?: mediaForMode.filter { !it.mimeType.startsWith("video/") }.randomOrNull()
+        }
     }
-    val currentSound = remember(activeRule.soundEntryId, activeRule.playSoundOnce, activeRule.soundMuted, mediaEntries) {
-        if (!activeRule.playSoundOnce || activeRule.soundMuted) null else mediaEntries.firstOrNull {
+    val currentSound = remember(activeRule.soundEntryId, activeRule.playSoundOnce, activeRule.soundMuted, mediaEntries, promptType, callState, promptPlaying) {
+        if (!activeRule.playSoundOnce || activeRule.soundMuted || (promptType != null && (callState == CallSessionState.DIALING || callState == CallSessionState.WAITING_FOR_ANSWER))) null else mediaEntries.firstOrNull {
             it.id == activeRule.soundEntryId && it.mimeType.startsWith("audio/") && File(it.filePath).exists()
         }
     }
     var playingStatusSoundCount by remember { mutableIntStateOf(0) }
     val statusSoundPlayers = remember { mutableListOf<MediaPlayer>() }
+    val promptUsesRuleAudio = promptRuleActive && (currentSound != null ||
+        (currentMedia != null && (!currentMedia.mimeType.startsWith("video/") || !ringbackVideoError)))
 
     fun transitionToStatus(id: String) {
         val target = configuration.statuses.firstOrNull { it.id == id } ?: return
@@ -229,6 +250,34 @@ internal fun InCallScreen(
 
     BackHandler {
         if (dialpadOpen) dialpadOpen = false else requestHangup()
+    }
+
+    val autoHangUpSeconds = extras.autoHangUpSecondsFor(number)
+    LaunchedEffect(number, connectedAt, autoHangUpSeconds, callState) {
+        val connectedAtMillis = connectedAt ?: return@LaunchedEffect
+        val delaySeconds = autoHangUpSeconds ?: return@LaunchedEffect
+        if (callState != CallSessionState.ACTIVE && callState != CallSessionState.ON_HOLD) return@LaunchedEffect
+        val remainingMillis = (connectedAtMillis + delaySeconds * 1_000L - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+        delay(remainingMillis)
+        requestHangup()
+    }
+
+    LaunchedEffect(number, promptType, promptRuleId, callState, promptPlaying) {
+        val type = promptType ?: return@LaunchedEffect
+        if (promptPlaying || (callState != CallSessionState.DIALING && callState != CallSessionState.WAITING_FOR_ANSWER)) return@LaunchedEffect
+        val remaining = (callStartedAtElapsed + type.delayMillis - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+        delay(remaining)
+        if (callState != CallSessionState.DIALING && callState != CallSessionState.WAITING_FOR_ANSWER) return@LaunchedEffect
+        val target = promptTargetRule
+        promptPlaying = true
+        val fallbackOutcome = when (type) {
+            CallPromptType.POWER_OFF -> CallOutcome.POWERED_OFF
+            CallPromptType.EMPTY_NUMBER -> CallOutcome.EMPTY_NUMBER
+            CallPromptType.BUSY -> CallOutcome.BUSY
+            CallPromptType.UNREACHABLE -> CallOutcome.UNREACHABLE
+        }
+        if (target != null) transitionToStatus(target.id) else callState = CallSessionState.PLAYING_OUTCOME
+        callOutcome = target?.outcome?.let { value -> CallOutcome.entries.firstOrNull { it.name == value } } ?: fallbackOutcome
     }
 
     DisposableEffect(context) {
@@ -321,9 +370,9 @@ internal fun InCallScreen(
         }
     }
 
-    DisposableEffect(callState, callOutcome, currentMedia?.filePath, isResumed) {
+    DisposableEffect(activeStatusId, callState, callOutcome, currentMedia?.filePath, promptRuleActive, isResumed) {
         val outcome = callOutcome
-        if (callState == CallSessionState.PLAYING_OUTCOME && outcome != null && currentMedia == null && isResumed && !activeRule.playSoundOnce) {
+        if (callState == CallSessionState.PLAYING_OUTCOME && outcome != null && currentMedia == null && isResumed && !activeRule.playSoundOnce && !promptRuleActive) {
             val player = CallOutcomePlayer(
                 context = context,
                 outcome = outcome,
@@ -334,6 +383,34 @@ internal fun InCallScreen(
         } else {
             onDispose { }
         }
+    }
+
+    DisposableEffect(activeStatusId, callState, promptRuleActive, promptType, promptUsesRuleAudio, isResumed) {
+        if (callState == CallSessionState.PLAYING_OUTCOME && promptRuleActive && promptType != null && !promptUsesRuleAudio && isResumed) {
+            val rawId = when (promptType) {
+                CallPromptType.POWER_OFF -> R.raw.audio_power_off
+                CallPromptType.EMPTY_NUMBER -> R.raw.audio_empty_number
+                CallPromptType.BUSY -> R.raw.audio_user_busy
+                CallPromptType.UNREACHABLE -> R.raw.audio_busy
+            }
+            val player = MediaPlayer.create(context, rawId)
+            if (player == null) {
+                requestHangup()
+                onDispose { }
+            } else {
+                player.setOnCompletionListener {
+                    if (activeRule.durationSeconds <= 0 || activeRule.timeoutTargetId == null) requestHangup()
+                }
+                player.setOnErrorListener { _, _, _ -> requestHangup(); true }
+                runCatching { player.start() }.onFailure { requestHangup() }
+                onDispose {
+                    player.setOnCompletionListener(null)
+                    player.setOnErrorListener(null)
+                    runCatching { if (player.isPlaying) player.stop() }
+                    player.release()
+                }
+            }
+        } else onDispose { }
     }
 
     LaunchedEffect(activeStatusId, isResumed, configuration.statuses) {
@@ -428,15 +505,16 @@ internal fun InCallScreen(
     }) {
       Box(modifier = Modifier.fillMaxSize()) {
         if (LocalInspectionMode.current) InCallPreviewBackdrop()
-        val videoSource = currentMedia?.takeIf { it.mimeType.startsWith("video/") }?.filePath?.let { Uri.fromFile(File(it)) }
-            ?: ringbackVideoUri?.takeIf { !activeRule.playSoundOnce && currentMedia == null && mode == CallAudioMode.RINGBACK && isOutgoing }
+        val videoSource = currentMedia?.takeIf { it.mimeType.startsWith("video/") && (isOutgoing || promptRuleActive) }?.filePath?.let { Uri.fromFile(File(it)) }
         if (isResumed && videoSource != null && !ringbackVideoError) {
             key(videoSource) {
                 RingbackVideo(
                     uri = videoSource,
                     onError = { ringbackVideoError = true },
+                    onStarted = { if (isOutgoing) onRingbackStarted(number) },
                 )
             }
+            if (isOutgoing) RingbackBadgeCanvas(badgeRule, modifier = Modifier.fillMaxSize().padding(top = 60.dp, bottom = 100.dp))
             Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.52f)))
         }
         Column(
@@ -621,7 +699,7 @@ internal fun InCallScreen(
 }
 
 @Composable
-private fun RingbackVideo(uri: Uri, onError: () -> Unit) {
+private fun RingbackVideo(uri: Uri, onError: () -> Unit, onStarted: () -> Unit) {
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
@@ -629,6 +707,7 @@ private fun RingbackVideo(uri: Uri, onError: () -> Unit) {
                 setOnPreparedListener { player ->
                     player.isLooping = true
                     start()
+                    onStarted()
                 }
                 setOnErrorListener { _, _, _ ->
                     onError()
