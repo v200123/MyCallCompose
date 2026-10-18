@@ -40,6 +40,7 @@ import com.lastcoffee.top.oppo_call_compose.feature.settings.CallModeSettingsScr
 import com.lastcoffee.top.oppo_call_compose.feature.settings.CallNumberPoolsScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.CallRulesScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.SettingsScreen
+import com.lastcoffee.top.oppo_call_compose.feature.settings.ConfigurationTransferScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.CustomLocationsScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackSettingsScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackBadgeRulesScreen
@@ -59,6 +60,7 @@ import kotlinx.coroutines.launch
 private data object HomeRoute
 private data object SearchRoute
 private data object SettingsRoute
+private data object ConfigurationTransferRoute
 private data object LocationsRoute
 private data object RingbackSettingsRoute
 private data object AutoHangUpRoute
@@ -108,9 +110,9 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
     }
     LaunchedEffect(records.map { it.number to it.description }, extras.locations) {
         records.asSequence().filter { it.demoIndex == null }
-            .map { mobileForLookup(it.number) ?: mobileForLookup(it.description) }
-            .filterNotNull().distinct().filter { extras.locationFor(it) == null }
-            .forEach { attributionStore.request(it) }
+            .map { mobileForLookup(it.number) ?: it.number }
+            .distinct()
+            .forEach { attributionStore.request(it, extras) }
     }
     var pendingDialNumber by remember { mutableStateOf<String?>(null) }
     val activeCall = backStack.lastOrNull() as? InCallRoute
@@ -121,7 +123,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
         else -> null
     }
     LaunchedEffect(visibleNumber, extras.locations) {
-        visibleNumber?.takeIf { extras.locationFor(it) == null }?.let { attributionStore.request(it) }
+        visibleNumber?.let { attributionStore.request(it, extras) }
     }
 
     if (activeCall != null) {
@@ -152,7 +154,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                     PhoneHomeScreen(
                         records = records,
                         locationFor = locationFor,
-                        onLookupLocation = { number -> scope.launch { if (extras.locationFor(number) == null) attributionStore.request(number) } },
+                        onLookupLocation = { number -> scope.launch { attributionStore.request(number, extras) } },
                         onShowDetail = { backStack.add(CallDetailRoute(it)) },
                         onShowContact = { backStack.add(ContactDetailRoute(it)) },
                         onStartCall = startSimulatedCall,
@@ -195,7 +197,12 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                         onOpenRingback = { backStack.add(RingbackSettingsRoute) },
                         onOpenAutoHangUp = { backStack.add(AutoHangUpRoute) },
                         onOpenPromptNumbers = { backStack.add(CallPromptNumbersRoute(it)) },
+                        onOpenConfigurationTransfer = { backStack.add(ConfigurationTransferRoute) },
                     )
+                }
+                entry<ConfigurationTransferRoute> {
+                    ConfigurationTransferScreen(manualCallStore, extrasStore, badgeStore,
+                        onBack = { backStack.removeLastOrNull() })
                 }
                 entry<AutoHangUpRoute> {
                     AutoHangUpScreen(extras, extrasStore, numberPools,
@@ -249,8 +256,8 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                         onUpdate = { entry -> manualCallStore.addMedia(entry) },
                         onDelete = { entry -> manualCallStore.deleteMedia(entry.id)?.let { removed ->
                             extrasStore.removeMedia(removed.id)
-                            CallMediaFiles.delete(removed.filePath)
-                            CallMediaFiles.delete(removed.iconPath)
+                            CallMediaFiles.delete(context, removed.filePath)
+                            CallMediaFiles.delete(context, removed.iconPath)
                         } },
                     )
                 }

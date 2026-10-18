@@ -17,6 +17,10 @@ data class CustomPhoneLocation(
             .filter { it.isNotBlank() }.joinToString(" ")
 }
 
+internal enum class CustomLocationSource { EXACT_NUMBER, SEVEN_DIGIT_PREFIX }
+
+internal data class CustomLocationMatch(val location: CustomPhoneLocation, val source: CustomLocationSource)
+
 private val mainlandMobilePattern = Regex("^1[3-9]\\d{9}$")
 private val mainlandMobilePrefixPattern = Regex("^1[3-9]\\d{5}$")
 
@@ -50,12 +54,15 @@ data class PhoneExtras(
     val statusBindings: Map<String, String> = emptyMap(),
     val promptCategoryRules: Map<CallPromptType, String> = emptyMap(),
 ) {
-    fun locationFor(number: String): String? {
+    fun locationFor(number: String): String? = customLocationMatch(number)?.location?.displayText
+
+    internal fun customLocationMatch(number: String): CustomLocationMatch? {
         val digits = normalizePhoneNumber(number)
-        locations[digits]?.let { return it.displayText }
+        locations[digits]?.let { return CustomLocationMatch(it, CustomLocationSource.EXACT_NUMBER) }
         val mobile = mainlandMobileDigits(digits) ?: return null
-        return (locations[mobile] ?: locations["86$mobile"] ?: locations["0086$mobile"]
-            ?: locations[mobile.take(7)])?.displayText
+        return (locations[mobile] ?: locations["86$mobile"] ?: locations["0086$mobile"])
+            ?.let { CustomLocationMatch(it, CustomLocationSource.EXACT_NUMBER) }
+            ?: locations[mobile.take(7)]?.let { CustomLocationMatch(it, CustomLocationSource.SEVEN_DIGIT_PREFIX) }
     }
 
     fun blocksRingback(number: String): Boolean = normalizePhoneNumber(number) in noRingbackNumbers
@@ -81,6 +88,16 @@ class PhoneExtrasStore(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences("phone_extras", Context.MODE_PRIVATE)
     private val mutable = MutableStateFlow(decode(preferences.getString("settings", null)))
     val settings: StateFlow<PhoneExtras> = mutable
+
+    fun exportSettings(): String = encode(mutable.value).toString()
+
+    fun replaceSettings(raw: String) {
+        val root = JSONObject(raw)
+        require(root.has("locations") && root.has("ringbackBindings") && root.has("promptNumbers")) { "号码配置不完整" }
+        val value = decode(raw)
+        check(preferences.edit().putString("settings", encode(value).toString()).commit()) { "号码配置保存失败" }
+        mutable.value = value
+    }
 
     fun saveLocation(location: CustomPhoneLocation) = update {
         val enteredNumber = normalizePhoneNumber(location.number)

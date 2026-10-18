@@ -45,6 +45,16 @@ class RingbackBadgeStore(context: Context) {
     private val mutable = MutableStateFlow(decode(preferences.getString("settings", null)))
     val settings: StateFlow<BadgeSettings> = mutable
 
+    fun exportSettings(): String = encode(mutable.value).toString()
+
+    fun replaceSettings(raw: String) {
+        val root = JSONObject(raw)
+        require(root.has("rules") && root.has("phoneBindings")) { "图标规则不完整" }
+        val value = decode(raw)
+        check(preferences.edit().putString("settings", encode(value).toString()).commit()) { "图标规则保存失败" }
+        mutable.value = value
+    }
+
     fun createRule(name: String): BadgeRule? {
         if (mutable.value.rules.size >= 20) return null
         val rule = BadgeRule(UUID.randomUUID().toString(), name.trim().ifBlank { "新规则" })

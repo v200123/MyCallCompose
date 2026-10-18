@@ -218,7 +218,10 @@ private fun StatusEditorDialog(
     val soundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             val imported = CallMediaFiles.importDocument(context, uri, "status_sounds") ?: return@launch
-            if (!imported.mimeType.startsWith("audio/")) return@launch
+            if (!imported.mimeType.startsWith("audio/")) {
+                CallMediaFiles.delete(context, imported.path)
+                return@launch
+            }
             val entry = CallMediaEntry(
                 id = UUID.randomUUID().toString(),
                 mode = CallAudioMode.STATUS_SOUND,
@@ -226,8 +229,12 @@ private fun StatusEditorDialog(
                 filePath = imported.path,
                 mimeType = imported.mimeType,
             )
-            onAddMedia(entry)
-            soundEntryId = entry.id
+            try {
+                onAddMedia(entry)
+                soundEntryId = entry.id
+            } catch (error: Exception) {
+                CallMediaFiles.delete(context, imported.path)
+            }
         }
     }
     var buttons by remember(initial) { mutableStateOf(initial.buttons.ifEmpty { defaultButtons(initial.stage) }) }
@@ -588,23 +595,45 @@ fun CallMediaLibraryScreen(
 ) {
     val context = LocalContext.current
     var iconTarget by remember { mutableStateOf<String?>(null) }
+    var importError by remember { mutableStateOf<String?>(null) }
     val iconPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val target = iconTarget; iconTarget = null
         if (uri != null && target != null) scope.launch {
-            CallMediaFiles.importDocument(context, uri, "icons")?.let { imported -> entries.firstOrNull { it.id == target }?.let { onUpdate(it.copy(iconPath = imported.path)) } }
+            importError = null
+            CallMediaFiles.importDocument(context, uri, "icons")?.let { imported ->
+                val entry = entries.firstOrNull { it.id == target }
+                if (entry == null) CallMediaFiles.delete(context, imported.path)
+                else {
+                    try {
+                        onUpdate(entry.copy(iconPath = imported.path))
+                        CallMediaFiles.delete(context, entry.iconPath)
+                    } catch (error: Exception) {
+                        CallMediaFiles.delete(context, imported.path)
+                        importError = "图标保存失败"
+                    }
+                }
+            } ?: run { importError = "图标复制失败" }
         }
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
-            val imported = CallMediaFiles.importDocument(context, uri, mode.name.lowercase()) ?: return@launch
+            importError = null
+            val imported = CallMediaFiles.importDocument(context, uri, mode.name.lowercase())
+                ?: run { importError = "文件复制失败"; return@launch }
             if (!mode.acceptsMimeType(imported.mimeType)) {
-                CallMediaFiles.delete(imported.path)
+                CallMediaFiles.delete(context, imported.path)
+                importError = "文件格式不符合${mode.title}要求"
                 return@launch
             }
-            if (mode == CallAudioMode.DEFAULT_TONE) {
-                entries.filter { it.mode == CallAudioMode.DEFAULT_TONE }.forEach { onDelete(it) }
+            val previous = if (mode == CallAudioMode.DEFAULT_TONE) entries.filter { it.mode == CallAudioMode.DEFAULT_TONE } else emptyList()
+            try {
+                onAdd(CallMediaEntry(UUID.randomUUID().toString(), mode, imported.title, imported.path, imported.mimeType))
+            } catch (error: Exception) {
+                CallMediaFiles.delete(context, imported.path)
+                importError = "媒体保存失败"
+                return@launch
             }
-            onAdd(CallMediaEntry(UUID.randomUUID().toString(), mode, imported.title, imported.path, imported.mimeType))
+            previous.forEach { old -> runCatching { onDelete(old) } }
         }
     }
     SettingsFrame("${mode.title}库", onBack, footer = {
@@ -620,6 +649,9 @@ fun CallMediaLibraryScreen(
             color = Color(0xFF707782),
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
+        Text("选择后会复制到应用私有目录，删除原文件不会影响播放。", color = Color(0xFF707782),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        importError?.let { Text(it, color = Color(0xFFB3261E), modifier = Modifier.padding(horizontal = 16.dp)) }
         if (entries.none { it.mode == mode && mode.acceptsMimeType(it.mimeType) }) Text("库中还没有符合格式的内容；模拟拨号时将继续状态规则。", color = Color(0xFF707782), modifier = Modifier.padding(20.dp))
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(entries.filter { it.mode == mode }, key = { it.id }) { item ->

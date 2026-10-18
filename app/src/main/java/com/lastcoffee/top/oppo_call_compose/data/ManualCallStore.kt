@@ -50,6 +50,32 @@ class ManualCallStore(context: Context) {
     val mediaEntries: Flow<List<CallMediaEntry>> = dao.observeMediaEntries().map { rows -> rows.map { it.toCallMediaEntry() } }
     val numberPools: Flow<List<CallNumberPoolEntity>> = dao.observeNumberPools()
 
+    suspend fun exportTransferState(): CallTransferState = database.withTransaction {
+        CallTransferState(
+            dao.getCallConfiguration()?.content ?: encodeConfiguration(CallFlowConfiguration()),
+            dao.getAllMediaEntries().map { it.toCallMediaEntry() },
+        )
+    }
+
+    suspend fun replaceTransferState(state: CallTransferState) = configurationMutex.withLock {
+        val root = JSONObject(state.configurationJson)
+        require((root.optJSONArray("statuses")?.length() ?: 0) > 0) { "通话规则为空" }
+        val mediaIds = state.mediaEntries.map { it.id }.toSet()
+        require(mediaIds.size == state.mediaEntries.size) { "媒体编号重复" }
+        require(state.mediaEntries.all { it.id.isNotBlank() && it.title.isNotBlank() && it.mode.acceptsMimeType(it.mimeType) }) { "媒体信息无效" }
+        val configuration = decodeConfiguration(state.configurationJson).let { config ->
+            config.copy(statuses = config.statuses.map { status -> status.copy(
+                mediaEntryId = status.mediaEntryId?.takeIf { it in mediaIds },
+                soundEntryId = status.soundEntryId?.takeIf { it in mediaIds },
+            ) })
+        }
+        database.withTransaction {
+            dao.deleteAllMediaEntries()
+            state.mediaEntries.forEach { dao.saveMediaEntry(it.toEntity()) }
+            dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(configuration)))
+        }
+    }
+
     suspend fun configuration(): CallFlowConfiguration = configurationMutex.withLock {
         val saved = dao.getCallConfiguration()
         if (saved != null) {
@@ -182,6 +208,11 @@ data class CallRuleConfigEntity(@PrimaryKey val id: Int = 1, val content: String
 
 @Entity(tableName = "call_number_pools")
 data class CallNumberPoolEntity(@PrimaryKey val number: String, val mode: String)
+
+data class CallTransferState(
+    val configurationJson: String,
+    val mediaEntries: List<CallMediaEntry>,
+)
 
 @Entity(tableName = "call_media")
 data class CallMediaEntity(
@@ -341,6 +372,7 @@ interface ManualCallDao {
     @Query("SELECT * FROM call_number_pools")
     suspend fun getAllNumberPools(): List<CallNumberPoolEntity>
 
+
     @Query("SELECT * FROM call_number_pools WHERE number = :number LIMIT 1")
     suspend fun getNumberPool(number: String): CallNumberPoolEntity?
 
@@ -352,6 +384,12 @@ interface ManualCallDao {
 
     @Query("SELECT * FROM call_media WHERE id = :id LIMIT 1")
     suspend fun getMediaEntry(id: String): CallMediaEntity?
+
+    @Query("SELECT * FROM call_media")
+    suspend fun getAllMediaEntries(): List<CallMediaEntity>
+
+    @Query("DELETE FROM call_media")
+    suspend fun deleteAllMediaEntries()
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveMediaEntry(entry: CallMediaEntity)

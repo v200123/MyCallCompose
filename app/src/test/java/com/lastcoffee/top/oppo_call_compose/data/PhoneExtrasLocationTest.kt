@@ -16,6 +16,8 @@ class PhoneExtrasLocationTest {
         assertEquals("北京", extras.locationFor("13800139999")?.substringBefore(' '))
         assertEquals("上海", extras.locationFor("+86 13800138000")?.substringBefore(' '))
         assertNull(extras.locationFor("13800149999"))
+        assertEquals(CustomLocationSource.EXACT_NUMBER, extras.customLocationMatch("13800138000")?.source)
+        assertEquals(CustomLocationSource.SEVEN_DIGIT_PREFIX, extras.customLocationMatch("13800139999")?.source)
     }
 
     @Test

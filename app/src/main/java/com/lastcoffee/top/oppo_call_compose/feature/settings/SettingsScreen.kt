@@ -40,6 +40,7 @@ fun SettingsScreen(
     onOpenRingback: () -> Unit,
     onOpenAutoHangUp: () -> Unit,
     onOpenPromptNumbers: (CallPromptType) -> Unit,
+    onOpenConfigurationTransfer: () -> Unit,
 ) {
     Surface(color = Color(0xFFF1F2F5), modifier = Modifier.fillMaxSize()) {
         Column(
@@ -106,6 +107,16 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("自动挂断号码", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .background(Color.White, RoundedCornerShape(20.dp))
+                    .clickable(onClick = onOpenConfigurationTransfer)
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("配置分享与导入", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
             }
             CallPromptType.entries.forEach { type ->
