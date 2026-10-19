@@ -40,7 +40,6 @@ import com.lastcoffee.top.oppo_call_compose.feature.settings.CallModeSettingsScr
 import com.lastcoffee.top.oppo_call_compose.feature.settings.CallNumberPoolsScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.CallRulesScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.SettingsScreen
-import com.lastcoffee.top.oppo_call_compose.feature.settings.ConfigurationTransferScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.CustomLocationsScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackSettingsScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackBadgeRulesScreen
@@ -60,7 +59,6 @@ import kotlinx.coroutines.launch
 private data object HomeRoute
 private data object SearchRoute
 private data object SettingsRoute
-private data object ConfigurationTransferRoute
 private data object LocationsRoute
 private data object RingbackSettingsRoute
 private data object AutoHangUpRoute
@@ -190,6 +188,9 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                 }
                 entry<SettingsRoute> {
                     SettingsScreen(
+                        calls = manualCallStore,
+                        extras = extrasStore,
+                        badges = badgeStore,
                         onBack = { backStack.removeLastOrNull() },
                         onAddCallRecord = { backStack.add(AddCallRecordRoute) },
                         onOpenCallRules = { backStack.add(CallModeSettingsRoute) },
@@ -197,12 +198,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                         onOpenRingback = { backStack.add(RingbackSettingsRoute) },
                         onOpenAutoHangUp = { backStack.add(AutoHangUpRoute) },
                         onOpenPromptNumbers = { backStack.add(CallPromptNumbersRoute(it)) },
-                        onOpenConfigurationTransfer = { backStack.add(ConfigurationTransferRoute) },
                     )
-                }
-                entry<ConfigurationTransferRoute> {
-                    ConfigurationTransferScreen(manualCallStore, extrasStore, badgeStore,
-                        onBack = { backStack.removeLastOrNull() })
                 }
                 entry<AutoHangUpRoute> {
                     AutoHangUpScreen(extras, extrasStore, numberPools,
@@ -269,11 +265,22 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                 }
                 entry<AddCallRecordRoute> {
                     AddCallRecordScreen(
-                        manualCount = manualCalls.size,
                         onBack = { backStack.removeLastOrNull() },
                         onSave = { newCall ->
                             try {
-                                manualCallStore.add(newCall)
+                                if (newCall.attribution == null && newCall.operator == null) {
+                                    attributionStore.request(newCall.number, extrasStore.settings.value)
+                                }
+                                val savedPlace = extrasStore.settings.value.customLocationMatch(newCall.number)?.location
+                                val lookupParts = attributionStore.locationFor(newCall.number)?.split(' ')?.filter(String::isNotBlank).orEmpty()
+                                val resolvedCall = newCall.copy(
+                                    attribution = newCall.attribution ?: savedPlace?.let { place ->
+                                        listOf(place.province, place.city.takeUnless { it == place.province }.orEmpty())
+                                            .filter(String::isNotBlank).joinToString("").ifBlank { null }
+                                    } ?: if (lookupParts.size >= 2) lookupParts.dropLast(1).joinToString("") else lookupParts.firstOrNull(),
+                                    operator = newCall.operator ?: savedPlace?.carrier?.ifBlank { null } ?: lookupParts.lastOrNull()?.takeIf { lookupParts.size >= 2 },
+                                )
+                                manualCallStore.add(resolvedCall)
                                 backStack.removeLastOrNull()
                                 true
                             } catch (_: Exception) {

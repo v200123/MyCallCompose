@@ -12,6 +12,11 @@ data class ManualCall(
     val durationSeconds: Int,
     val timeMillis: Long,
     val wasConnected: Boolean = true,
+    val attribution: String? = null,
+    val operator: String? = null,
+    val connectedTimeMillis: Long = 0,
+    val endTimeMillis: Long = 0,
+    val callNumber: Int = 0,
 ) {
     fun toCallRecord(): CallRecord {
         val time = Instant.ofEpochMilli(timeMillis).atZone(ZoneId.systemDefault())

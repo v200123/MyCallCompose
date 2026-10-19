@@ -37,9 +37,7 @@ import org.json.JSONObject
 
 class ManualCallStore(context: Context) {
     private val appContext = context.applicationContext
-    private val database = Room.databaseBuilder(appContext, ManualCallDatabase::class.java, "manual_calls.db")
-        .addMigrations(ManualCallMigration1To2, ManualCallMigration2To3, ManualCallMigration3To4)
-        .build()
+    private val database = openManualCallDatabase(appContext)
     private val dao = database.manualCallDao()
     private val importMutex = Mutex()
     private val configurationMutex = Mutex()
@@ -153,10 +151,14 @@ class ManualCallStore(context: Context) {
     suspend fun add(call: ManualCall) {
         importLegacyRecords()
         dao.insert(call.toEntity())
+        appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
     }
 
     suspend fun delete(record: CallRecord) {
-        record.storedId?.let { dao.deleteById(it) }
+        record.storedId?.let {
+            dao.deleteById(it)
+            appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
+        }
         record.demoIndex?.let { dao.hideDemo(HiddenDemoCallEntity(it)) }
     }
 
@@ -165,6 +167,7 @@ class ManualCallStore(context: Context) {
             dao.deleteAllCalls()
             dao.hideDemo((0 until demoCount).map(::HiddenDemoCallEntity))
         }
+        appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
     }
 
     suspend fun importLegacyRecords() = withContext(Dispatchers.IO) {
@@ -186,9 +189,15 @@ class ManualCallStore(context: Context) {
             }
             dao.insertLegacy(rows)
             check(preferences.edit().remove("records").commit()) { "Could not finish legacy call record migration" }
+            if (rows.isNotEmpty()) appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
         }
     }
 }
+
+internal fun openManualCallDatabase(context: Context): ManualCallDatabase =
+    Room.databaseBuilder(context.applicationContext, ManualCallDatabase::class.java, "manual_calls.db")
+        .addMigrations(ManualCallMigration1To2, ManualCallMigration2To3, ManualCallMigration3To4, ManualCallMigration4To5)
+        .build()
 
 @Entity(tableName = "manual_calls")
 data class ManualCallEntity(
@@ -198,6 +207,11 @@ data class ManualCallEntity(
     val durationSeconds: Int,
     val timeMillis: Long,
     val wasConnected: Boolean,
+    val attribution: String?,
+    val operator: String?,
+    val connectedTimeMillis: Long,
+    val endTimeMillis: Long,
+    val callNumber: Int,
 )
 
 @Entity(tableName = "hidden_demo_calls")
@@ -219,9 +233,15 @@ data class CallMediaEntity(
     @PrimaryKey val id: String, val mode: String, val title: String, val filePath: String, val mimeType: String, val iconPath: String?,
 )
 
-private fun ManualCall.toEntity() = ManualCallEntity(id, number, kind.name, durationSeconds, timeMillis, wasConnected)
+private fun ManualCall.toEntity() = ManualCallEntity(
+    id, number, kind.name, durationSeconds, timeMillis, wasConnected,
+    attribution, operator, connectedTimeMillis, endTimeMillis, callNumber,
+)
 
-private fun ManualCallEntity.toManualCall() = ManualCall(id, number, CallKind.valueOf(kind), durationSeconds, timeMillis, wasConnected)
+private fun ManualCallEntity.toManualCall() = ManualCall(
+    id, number, CallKind.valueOf(kind), durationSeconds, timeMillis, wasConnected,
+    attribution, operator, connectedTimeMillis, endTimeMillis, callNumber,
+)
 private fun CallMediaEntry.toEntity() = CallMediaEntity(id, mode.name, title, filePath, mimeType, iconPath)
 private fun CallMediaEntity.toCallMediaEntry() = CallMediaEntry(id, CallAudioMode.fromStored(mode), title, filePath, mimeType, iconPath)
 
@@ -331,6 +351,16 @@ private val ManualCallMigration3To4 = object : Migration(3, 4) {
     }
 }
 
+private val ManualCallMigration4To5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE manual_calls ADD COLUMN attribution TEXT")
+        db.execSQL("ALTER TABLE manual_calls ADD COLUMN operator TEXT")
+        db.execSQL("ALTER TABLE manual_calls ADD COLUMN connectedTimeMillis INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE manual_calls ADD COLUMN endTimeMillis INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE manual_calls ADD COLUMN callNumber INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Dao
 interface ManualCallDao {
     @Query("SELECT * FROM manual_calls ORDER BY timeMillis DESC, id DESC")
@@ -398,7 +428,7 @@ interface ManualCallDao {
     suspend fun deleteMediaEntry(id: String)
 }
 
-@Database(entities = [ManualCallEntity::class, HiddenDemoCallEntity::class, CallRuleConfigEntity::class, CallNumberPoolEntity::class, CallMediaEntity::class], version = 4, exportSchema = true)
+@Database(entities = [ManualCallEntity::class, HiddenDemoCallEntity::class, CallRuleConfigEntity::class, CallNumberPoolEntity::class, CallMediaEntity::class], version = 5, exportSchema = true)
 abstract class ManualCallDatabase : RoomDatabase() {
     abstract fun manualCallDao(): ManualCallDao
 }

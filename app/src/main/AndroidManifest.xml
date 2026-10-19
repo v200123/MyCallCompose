@@ -6,6 +6,13 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <permission
+        android:name="com.lastcoffee.top.oppo_call_compose.permission.READ_CALL_RECORDS"
+        android:protectionLevel="normal" />
+    <permission
+        android:name="com.lastcoffee.top.oppo_call_compose.permission.WRITE_CALL_RECORDS"
+        android:protectionLevel="signature" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -15,6 +22,12 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.OPPO_Call_Compose">
+        <provider
+            android:name=".data.CallRecordProvider"
+            android:authorities="com.lastcoffee.top.oppo_call_compose.provider"
+            android:exported="true"
+            android:readPermission="com.lastcoffee.top.oppo_call_compose.permission.READ_CALL_RECORDS"
+            android:writePermission="com.lastcoffee.top.oppo_call_compose.permission.WRITE_CALL_RECORDS" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
