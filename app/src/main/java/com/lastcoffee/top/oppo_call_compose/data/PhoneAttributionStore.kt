@@ -88,6 +88,10 @@ class PhoneAttributionStore(context: Context) {
             }
             if (result == null) log("local_miss", mobile) else log("local_hit", mobile, "location=$result")
             result
+        } catch (error: LinkageError) {
+            // Missing classes or a failed static initializer must still allow the online fallback.
+            log("local_unavailable", mobile, "cause=${error.javaClass.simpleName}", warning = true)
+            null
         } catch (error: Exception) {
             log("local_error", mobile, "cause=${error.javaClass.simpleName}", warning = true)
             null
