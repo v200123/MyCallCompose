@@ -162,11 +162,8 @@ class ManualCallStore(context: Context) {
         record.demoIndex?.let { dao.hideDemo(HiddenDemoCallEntity(it)) }
     }
 
-    suspend fun clearAll(demoCount: Int) {
-        database.withTransaction {
-            dao.deleteAllCalls()
-            dao.hideDemo((0 until demoCount).map(::HiddenDemoCallEntity))
-        }
+    suspend fun clearAll() {
+        dao.deleteAllCalls()
         appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
     }
 

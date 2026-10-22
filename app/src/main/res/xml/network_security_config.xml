@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 与原更新模块一致，兼容更新服务及其返回的 HTTP 安装包地址。 -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

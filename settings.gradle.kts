@@ -24,4 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "OPPO_Call_Compose"
 include(":app")
- 
+include(":app-updater")

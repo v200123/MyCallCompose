@@ -40,15 +40,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lastcoffee.top.oppo_call_compose.data.CallPromptType
+import com.lastcoffee.top.oppo_call_compose.BuildConfig
 import com.lastcoffee.top.oppo_call_compose.data.ConfigurationPackage
 import com.lastcoffee.top.oppo_call_compose.data.ManualCallStore
 import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
 import com.lastcoffee.top.oppo_call_compose.data.RingbackBadgeStore
 import androidx.core.content.FileProvider
+import com.lastcoffee.top.oppo_call_compose.ui.theme.OPPO_Call_ComposeTheme
 import kotlinx.coroutines.launch
 
 @Composable
@@ -63,6 +66,7 @@ fun SettingsScreen(
     onOpenRingback: () -> Unit,
     onOpenAutoHangUp: () -> Unit,
     onOpenPromptNumbers: (CallPromptType) -> Unit,
+    onCheckForUpdate: () -> Unit,
 ) {
     val context = LocalContext.current
     val packager = remember(context, calls, extras, badges) { ConfigurationPackage(context, calls, extras, badges) }
@@ -183,6 +187,10 @@ fun SettingsScreen(
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
                 }
             }
+            AppUpdateSettingsRow(
+                currentVersion = BuildConfig.VERSION_NAME,
+                onCheckForUpdate = onCheckForUpdate,
+            )
             }
         }
     }
@@ -193,5 +201,30 @@ fun SettingsScreen(
             text = { Text(result) },
             confirmButton = { TextButton(onClick = { message = null }) { Text("确定") } },
         )
+    }
+}
+
+@Composable
+private fun AppUpdateSettingsRow(currentVersion: String, onCheckForUpdate: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+            .background(Color.White, RoundedCornerShape(20.dp))
+            .clickable(onClick = onCheckForUpdate)
+            .padding(horizontal = 20.dp, vertical = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("检查更新", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text("当前版本：$currentVersion", fontSize = 14.sp, color = Color(0xFF858585))
+        }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
+    }
+}
+
+@Preview(showBackground = true, widthDp = 540)
+@Composable
+private fun AppUpdateSettingsRowPreview() {
+    OPPO_Call_ComposeTheme(darkTheme = false, dynamicColor = false) {
+        AppUpdateSettingsRow(currentVersion = "1.0", onCheckForUpdate = {})
     }
 }

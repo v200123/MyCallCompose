@@ -28,7 +28,6 @@ import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
 import com.lastcoffee.top.oppo_call_compose.data.PhoneAttributionStore
 import com.lastcoffee.top.oppo_call_compose.data.mobileForLookup
 import com.lastcoffee.top.oppo_call_compose.data.RingbackBadgeStore
-import com.lastcoffee.top.oppo_call_compose.data.demoCalls
 import com.lastcoffee.top.oppo_call_compose.feature.call.CallDetailScreen
 import com.lastcoffee.top.oppo_call_compose.feature.call.InCallScreen
 import com.lastcoffee.top.oppo_call_compose.feature.contacts.ContactsScreen
@@ -76,7 +75,7 @@ private data class ContactDetailRoute(val contact: ContactMatch)
 private data class InCallRoute(val number: String, val mode: CallAudioMode, val initialStatusId: String, val configuration: CallFlowConfiguration)
 
 @Composable
-fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
+fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {}) {
     val context = LocalContext.current
     val manualCallStore = remember(context) { ManualCallStore(context) }
     val extrasStore = remember(context) { PhoneExtrasStore(context) }
@@ -89,7 +88,6 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
     val badgeStore = remember(context) { RingbackBadgeStore(context) }
     val badgeSettings by badgeStore.settings.collectAsState()
     val manualCalls by manualCallStore.calls.collectAsState(initial = emptyList())
-    val hiddenDemoIndexes by manualCallStore.hiddenDemoIndexes.collectAsState(initial = emptyList())
     val callConfiguration by manualCallStore.callConfiguration.collectAsState(initial = CallFlowConfiguration())
     val numberPools by manualCallStore.numberPools.collectAsState(initial = emptyList())
     val mediaEntries by manualCallStore.mediaEntries.collectAsState(initial = emptyList())
@@ -103,11 +101,9 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
             backStack.add(InCallRoute(number, setup.mode, setup.initialStatusId, setup.configuration))
         }
     }
-    val records = manualCalls.map { it.toCallRecord() } + demoCalls.mapIndexedNotNull { index, record ->
-        if (index in hiddenDemoIndexes) null else record.copy(demoIndex = index)
-    }
+    val records = manualCalls.map { it.toCallRecord() }
     LaunchedEffect(records.map { it.number to it.description }, extras.locations) {
-        records.asSequence().filter { it.demoIndex == null }
+        records.asSequence()
             .map { mobileForLookup(it.number) ?: it.number }
             .distinct()
             .forEach { attributionStore.request(it, extras) }
@@ -162,7 +158,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                         onDialRequestConsumed = { pendingDialNumber = null },
                         onClearCalls = {
                             try {
-                                manualCallStore.clearAll(demoCalls.size)
+                                manualCallStore.clearAll()
                                 true
                             } catch (_: Exception) {
                                 false
@@ -198,6 +194,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}) {
                         onOpenRingback = { backStack.add(RingbackSettingsRoute) },
                         onOpenAutoHangUp = { backStack.add(AutoHangUpRoute) },
                         onOpenPromptNumbers = { backStack.add(CallPromptNumbersRoute(it)) },
+                        onCheckForUpdate = onCheckForUpdate,
                     )
                 }
                 entry<AutoHangUpRoute> {

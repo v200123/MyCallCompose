@@ -16,8 +16,13 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "UPDATE_SERVICE_BASE_URL", "\"http://www.lastcoffee.top:8082\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += setOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -32,6 +37,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }
@@ -41,6 +47,7 @@ ksp {
 }
 
 dependencies {
+    implementation(project(":app-updater"))
     implementation("me.ihxq.projects:phone-number-geo:1.0.10-202502")
     // phone-number-geo uses SLF4J but publishes its logging bridge as optional.
     implementation("org.slf4j:slf4j-api:1.7.36")
