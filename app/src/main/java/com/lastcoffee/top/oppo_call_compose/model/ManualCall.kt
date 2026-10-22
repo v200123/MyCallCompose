@@ -33,6 +33,9 @@ data class ManualCall(
             durationDetail = "$type  $detail",
             storedId = id,
             isUnanswered = isUnanswered,
+            timeMillis = timeMillis,
+            attribution = attribution,
+            operator = operator,
         )
     }
 }

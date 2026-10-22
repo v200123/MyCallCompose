@@ -8,7 +8,10 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -37,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -56,6 +60,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +71,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
@@ -120,10 +126,17 @@ internal fun PhoneHomeScreen(
     onDialRequestConsumed: () -> Unit,
     onClearCalls: suspend () -> Boolean,
     onDial: (String) -> Unit,
+    contacts: List<ContactMatch> = demoContacts,
+    onSaveContact: (ContactMatch) -> Unit = {},
+    onDeleteRecords: suspend (List<CallRecord>) -> Boolean = { false },
 ) {
-    var selectedTab by remember { mutableStateOf(PhoneTab.CALLS) }
-    var dialPadVisible by remember { mutableStateOf(false) }
-    var dialedNumber by remember { mutableStateOf("") }
+    var selectedTab by rememberSaveable { mutableStateOf(PhoneTab.CALLS) }
+    var dialPadVisible by rememberSaveable { mutableStateOf(true) }
+    var dialedNumber by rememberSaveable { mutableStateOf("") }
+    var newContactNumber by rememberSaveable { mutableStateOf<String?>(null) }
+    var existingContactNumber by rememberSaveable { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val simLabels = remember(context) { homeSimLabels(context) }
     LaunchedEffect(dialedNumber) { onLookupLocation(dialedNumber) }
     LaunchedEffect(pendingDialNumber) {
         if (pendingDialNumber != null) {
@@ -165,8 +178,20 @@ internal fun PhoneHomeScreen(
                         onOpenSearch = onOpenSearch,
                         onOpenSettings = onOpenSettings,
                         onClearCalls = onClearCalls,
+                        contacts = contacts,
+                        simLabels = simLabels,
+                        onDeleteRecords = onDeleteRecords,
+                        onCreateContact = { newContactNumber = it; selectedTab = PhoneTab.CONTACTS },
+                        onSaveExisting = { existingContactNumber = it; selectedTab = PhoneTab.CONTACTS },
                     )
-                    PhoneTab.CONTACTS -> ContactsScreen(onShowContact = onShowContact)
+                    PhoneTab.CONTACTS -> ContactsScreen(
+                        onShowContact = onShowContact,
+                        contacts = contacts,
+                        onSaveContact = onSaveContact,
+                        newContactNumber = newContactNumber,
+                        existingContactNumber = existingContactNumber,
+                        onContactRequestConsumed = { newContactNumber = null; existingContactNumber = null },
+                    )
                     PhoneTab.STORE -> SimpleDestination("营业厅", "套餐与便民服务将在这里显示", Icons.Filled.Storefront)
                 }
             }
@@ -192,8 +217,19 @@ private fun CallsScreen(
     onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
     onClearCalls: suspend () -> Boolean,
+    contacts: List<ContactMatch>,
+    simLabels: List<String>,
+    onDeleteRecords: suspend (List<CallRecord>) -> Boolean,
+    onCreateContact: (String) -> Unit,
+    onSaveExisting: (String) -> Unit,
 ) {
-    var missedOnly by remember { mutableStateOf(false) }
+    var missedOnly by rememberSaveable { mutableStateOf(false) }
+    var editing by rememberSaveable { mutableStateOf(false) }
+    var selectedKeys by remember { mutableStateOf(emptySet<String>()) }
+    var showDeleteSelected by remember { mutableStateOf(false) }
+    val groups = remember(records, missedOnly) { groupHomeCalls(records, missedOnly) }
+    BackHandler(enabled = editing) { editing = false; selectedKeys = emptySet() }
+    LaunchedEffect(groups) { selectedKeys = selectedKeys.intersect(groups.map { it.key }.toSet()) }
     var menuVisible by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
     var clearing by remember { mutableStateOf(false) }
@@ -227,10 +263,13 @@ private fun CallsScreen(
     val headerProgress = (headerScrollPx / headerTravelPx).coerceIn(0f, 1f)
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize().then(if (dialedNumber.isBlank()) Modifier.nestedScroll(headerScroll) else Modifier)) {
+        Column(modifier = Modifier.fillMaxSize().then(if (dialedNumber.isBlank() && !editing) Modifier.nestedScroll(headerScroll) else Modifier)) {
             // Opening the dialpad alone keeps the call-page tabs visible; typing a
             // digit switches to the source-style number-search surface.
-            if (!dialPadVisible || dialedNumber.isBlank()) {
+            if (editing) {
+                SelectionTopBar(selectedKeys.size, groups.size, onCancel = { editing = false; selectedKeys = emptySet() },
+                    onSelectAll = { selectedKeys = if (selectedKeys.size == groups.size) emptySet() else groups.map { it.key }.toSet() })
+            } else if (!dialPadVisible || dialedNumber.isBlank()) {
                 CallsTopBar(
                     collapseProgress = headerProgress,
                     missedOnly = missedOnly,
@@ -240,6 +279,11 @@ private fun CallsScreen(
                     onDismissMenu = { menuVisible = false },
                     onSettingsClick = onOpenSettings,
                     onSearchClick = onOpenSearch,
+                    onEditClick = {
+                        menuVisible = false
+                        editing = true
+                        onHideDialPad()
+                    },
                     onClearClick = {
                         menuVisible = false
                         showClearDialog = true
@@ -247,19 +291,27 @@ private fun CallsScreen(
                 )
             }
             if (dialedNumber.isNotBlank()) {
-                DialSearchResults(number = dialedNumber, records = records, onInfo = onShowDetail, locationFor = locationFor)
+                DialSearchResults(number = dialedNumber, records = records, allContacts = contacts,
+                    onInfo = onShowDetail, onDial = onDial, locationFor = locationFor,
+                    onCreateContact = onCreateContact, onSaveExisting = onSaveExisting)
             } else {
                 CallList(
-                    records = if (missedOnly) records.filter { it.isUnanswered } else records,
+                    groups = groups,
                     locationFor = locationFor,
                     state = listState,
                     onInfo = onShowDetail,
+                    onCall = { onDial(it.homeNumber()) },
+                    editing = editing,
+                    selectedKeys = selectedKeys,
+                    onSelect = { group -> selectedKeys = if (group.key in selectedKeys) selectedKeys - group.key else selectedKeys + group.key },
+                    onLongPress = { group -> editing = true; selectedKeys = setOf(group.key); onHideDialPad() },
+                    showSim = simLabels.size > 1,
                     contentBottomPadding = if (dialPadVisible) 370.dp else 72.dp,
                 )
             }
         }
 
-        if (!dialPadVisible) {
+        if (!dialPadVisible && !editing) {
             DialPadFab(
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 24.dp),
                 onClick = onShowDialPad,
@@ -267,7 +319,7 @@ private fun CallsScreen(
         }
 
         AnimatedVisibility(
-            visible = dialPadVisible,
+            visible = dialPadVisible && !editing,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -275,10 +327,31 @@ private fun CallsScreen(
             OppoDialPad(
                 number = dialedNumber,
                 onNumberChange = onDialNumberChange,
-                onDial = { onDial(dialedNumber.filter(Char::isDigit)) },
+                onDial = { onDial(dialedNumber) },
                 onDismiss = onHideDialPad,
+                simLabels = simLabels,
             )
         }
+        if (editing) {
+            Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(64.dp).background(Color.White),
+                horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { showDeleteSelected = true }, enabled = selectedKeys.isNotEmpty()) { Text("删除") }
+            }
+        }
+    }
+    if (showDeleteSelected) {
+        AlertDialog(onDismissRequest = { if (!clearing) showDeleteSelected = false },
+            title = { Text("删除所选通话记录？") },
+            text = { Text(if (clearFailed) "删除失败，请重试" else "将删除所选号码的这些通话记录") },
+            confirmButton = { TextButton(enabled = !clearing, onClick = {
+                clearing = true
+                scope.launch {
+                    clearFailed = !onDeleteRecords(groups.filter { it.key in selectedKeys }.flatMap { it.calls })
+                    clearing = false
+                    if (!clearFailed) { showDeleteSelected = false; editing = false; selectedKeys = emptySet() }
+                }
+            }) { Text("删除") } },
+            dismissButton = { TextButton(enabled = !clearing, onClick = { showDeleteSelected = false }) { Text("取消") } })
     }
     if (showClearDialog) {
         AlertDialog(
@@ -315,6 +388,7 @@ private fun CallsTopBar(
     onSettingsClick: () -> Unit,
     onSearchClick: () -> Unit,
     onClearClick: () -> Unit,
+    onEditClick: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -338,6 +412,7 @@ private fun CallsTopBar(
                 Box {
                     IconButton(onClick = onMenuClick) { Image(painterResource(R.drawable.oppo_coui_toolbar_menu_icon_more_normal), contentDescription = "更多", modifier = Modifier.size(24.dp)) }
                     DropdownMenu(expanded = menuVisible, onDismissRequest = onDismissMenu) {
+                        DropdownMenuItem(text = { Text("编辑") }, onClick = onEditClick)
                         DropdownMenuItem(text = { Text("设置") }, onClick = {
                             onDismissMenu()
                             onSettingsClick()
@@ -348,10 +423,10 @@ private fun CallsTopBar(
             }
         }
         Box(
-            modifier = Modifier.offset(x = 16.dp, y = 54.dp * (1f - collapseProgress)).height(53.dp),
+            modifier = Modifier.offset(x = 16.dp, y = 47.dp * (1f - collapseProgress)).height(53.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
-            Text("通话", style = oppoTextStyle((32f - 14f * collapseProgress).sp, weight = FontWeight.Medium), maxLines = 1)
+            Text("通话", style = oppoTextStyle((32f - 14f * collapseProgress).sp, weight = if (collapseProgress < 0.5f) FontWeight.Bold else FontWeight.Medium), maxLines = 1)
         }
         HorizontalDivider(
             color = OppoDividerColor.copy(alpha = OppoDividerColor.alpha * collapseProgress),
@@ -382,66 +457,104 @@ private fun FilterChoice(label: String, selected: Boolean, modifier: Modifier = 
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, style = oppoTextStyle(14.sp, if (selected) OppoPrimary else OppoSecondary, FontWeight.Medium))
+        Text(label, style = oppoTextStyle(12.sp, if (selected) OppoPrimary else OppoSecondary, FontWeight.Medium))
+    }
+}
+
+@Composable
+private fun SelectionTopBar(count: Int, total: Int, onCancel: () -> Unit, onSelectAll: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = onCancel) { Text("取消") }
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            Text(if (count == 0) "选择通话记录" else "已选择 $count 项", style = oppoTextStyle(18.sp, weight = FontWeight.Medium))
+        }
+        TextButton(onClick = onSelectAll) { Text(if (total > 0 && count == total) "全不选" else "全选") }
     }
 }
 
 @Composable
 private fun CallList(
-    records: List<CallRecord>,
+    groups: List<HomeCallGroup>,
     locationFor: (String) -> String?,
     state: androidx.compose.foundation.lazy.LazyListState,
     onInfo: (CallRecord) -> Unit,
+    onCall: (CallRecord) -> Unit,
+    editing: Boolean,
+    selectedKeys: Set<String>,
+    onSelect: (HomeCallGroup) -> Unit,
+    onLongPress: (HomeCallGroup) -> Unit,
+    showSim: Boolean,
     contentBottomPadding: androidx.compose.ui.unit.Dp,
 ) {
     LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
-        itemsIndexed(records) { index, record ->
-            CallRow(record = record, location = locationFor(record.number) ?: locationFor(record.description), onInfo = { onInfo(record) }, showDivider = index < records.lastIndex)
+        if (groups.isEmpty()) item {
+            Box(Modifier.fillMaxWidth().height(220.dp), contentAlignment = Alignment.Center) {
+                Text("暂无通话记录", style = oppoTextStyle(16.sp, OppoSecondary))
+            }
+        }
+        itemsIndexed(groups) { index, group ->
+            val record = group.latest
+            CallRow(record, location = record.homeAttribution(locationFor(record.homeNumber())),
+                onInfo = { onInfo(record) }, onCall = { if (editing) onSelect(group) else onCall(record) },
+                onLongPress = { onLongPress(group) }, showDivider = index < groups.lastIndex,
+                callCount = group.calls.size, showSim = showSim, editing = editing,
+                selected = group.key in selectedKeys)
         }
         item { Spacer(modifier = Modifier.height(contentBottomPadding)) }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CallRow(record: CallRecord, location: String?, onInfo: () -> Unit, showDivider: Boolean = true, query: String = "") {
-    val primaryColor = if (record.isUnanswered) MissedRed else OppoPrimary
-    // call_log_list_item.xml: icon at 16dp; number starts after 16dp icon + 8dp.
-    // The divider spans the whole row, independently of the date and info button.
-    Box(Modifier.fillMaxWidth()) {
+private fun CallRow(record: CallRecord, location: String?, onInfo: () -> Unit, onCall: () -> Unit,
+                    onLongPress: () -> Unit, showDivider: Boolean = true, callCount: Int = 1,
+                    showSim: Boolean = false, editing: Boolean = false, selected: Boolean = false) {
+    val missed = record.kind == CallKind.MISSED
+    val primaryColor = if (missed) MissedRed else OppoPrimary
+    val displayName = if (record.number.any(Char::isLetter)) record.number else formatDialNumber(record.number)
+    val title = displayName + if (callCount > 1) " ($callCount)" else ""
+    Box(Modifier.fillMaxWidth().combinedClickable(onClick = onCall, onLongClick = onLongPress)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 16.dp), verticalAlignment = Alignment.Top) {
-            Icon(painterResource(record.kind.oppoIcon), null,
-                tint = if (record.isUnanswered) MissedRed else Color.Unspecified,
-                modifier = Modifier.padding(top = 12.dp).size(16.dp))
+            if (editing) {
+                Checkbox(checked = selected, onCheckedChange = { onCall() }, modifier = Modifier.padding(top = 8.dp).size(24.dp))
+            } else {
+                Icon(painterResource(record.kind.oppoIcon), null,
+                    tint = if (missed) MissedRed else Color.Unspecified,
+                    modifier = Modifier.padding(top = 12.dp).size(16.dp))
+            }
             Column(Modifier.weight(1f).padding(start = 8.dp, top = 10.dp, end = 5.dp, bottom = 10.dp)) {
-                val label = buildAnnotatedString {
-                    val start = if (query.isBlank()) -1 else record.number.indexOf(query)
-                    if (start < 0) append(record.number) else {
-                        append(record.number.take(start))
-                        withStyle(SpanStyle(color = OppoGreen)) { append(record.number.substring(start, start + query.length)) }
-                        append(record.number.drop(start + query.length))
+                Text(title, style = oppoTextStyle(16.sp, primaryColor, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                FlowRow(Modifier.padding(top = 2.dp), verticalArrangement = Arrangement.Center) {
+                    if (showSim) {
+                        Image(painterResource(R.drawable.ic_call_1_badge), "卡1", Modifier.align(Alignment.CenterVertically).size(15.dp, 13.dp))
                     }
+                    val breeno = record.description.contains("小布通话")
+                    if (breeno) Text("小布通话  ", style = oppoTextStyle(14.sp, OppoSecondary))
+                    Text(location.orEmpty().removePrefix("小布通话").trim(), style = oppoTextStyle(14.sp, OppoSecondary))
+                    record.tag?.let { Text(it, style = oppoTextStyle(14.sp, TagOrange)) }
                 }
-                Text(label, style = oppoTextStyle(16.sp, primaryColor, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(location ?: record.description, Modifier.padding(top = 2.dp), style = oppoTextStyle(14.sp, OppoSecondary))
-                record.tag?.let { Text(it, style = oppoTextStyle(14.sp, TagOrange)) }
             }
-            Text(record.date, Modifier.align(Alignment.CenterVertically), style = oppoTextStyle(14.sp, OppoSecondary))
-            Box(Modifier.align(Alignment.CenterVertically).padding(end = 6.dp).width(44.dp).height(64.dp).clickable(onClick = onInfo), contentAlignment = Alignment.Center) {
-                Image(painterResource(R.drawable.oppo_pb_dr_detail_normal), "详情", Modifier.size(24.dp))
-            }
+            Text(homeCallDate(record), Modifier.align(Alignment.CenterVertically), style = oppoTextStyle(14.sp, OppoSecondary))
+            if (!editing) {
+                Box(Modifier.align(Alignment.CenterVertically).padding(end = 6.dp).width(44.dp).height(64.dp).clickable(onClick = onInfo), contentAlignment = Alignment.Center) {
+                    Image(painterResource(R.drawable.oppo_pb_dr_detail_normal), "详情", Modifier.size(24.dp))
+                }
+            } else Spacer(Modifier.width(16.dp))
         }
         if (showDivider) OppoDivider(start = 41.dp, end = 16.dp, modifier = Modifier.align(Alignment.BottomCenter))
     }
 }
 
 @Composable
-private fun DialSearchResults(number: String, records: List<CallRecord>, onInfo: (CallRecord) -> Unit, locationFor: (String) -> String?) {
-    val contacts = remember(number) { demoContacts.filter { it.number.filter(Char::isDigit).startsWith(number) } }
+private fun DialSearchResults(number: String, records: List<CallRecord>, allContacts: List<ContactMatch>,
+                              onInfo: (CallRecord) -> Unit, onDial: (String) -> Unit, locationFor: (String) -> String?,
+                              onCreateContact: (String) -> Unit, onSaveExisting: (String) -> Unit) {
+    val contacts = remember(allContacts, number) { matchingDialContacts(allContacts, number) }
     val matches = remember(records, contacts, number) {
         val contactNumbers = contacts.map { it.number.filter(Char::isDigit) }.toSet()
         records.filter { record ->
             val digits = record.searchPhoneNumber()
-            digits.startsWith(number) && digits !in contactNumbers
+            dialMatchesNumber(digits, number) && digits !in contactNumbers
         }.distinctBy { it.searchPhoneNumber() }
     }
     Column(modifier = Modifier.fillMaxSize()) {
@@ -454,10 +567,10 @@ private fun DialSearchResults(number: String, records: List<CallRecord>, onInfo:
         } else null
         OppoDialNumberHeader(number, location, showDivider = resultsState.canScrollBackward)
         // dialpad_add_contact starts 116.33dp below the content top.
-        Spacer(modifier = Modifier.height(8.dp))
         LazyColumn(state = resultsState, modifier = Modifier.fillMaxSize()) {
             itemsIndexed(matches) { index, record ->
                 DialSearchRow(
+                    onCall = { onDial(record.searchPhoneNumber()) },
                     name = record.number.takeIf { it.any(Char::isLetter) },
                     number = record.searchPhoneNumber(),
                     location = locationFor(record.searchPhoneNumber())
@@ -470,6 +583,7 @@ private fun DialSearchResults(number: String, records: List<CallRecord>, onInfo:
             }
             itemsIndexed(contacts) { index, contact ->
                 DialSearchRow(
+                    onCall = { onDial(contact.number) },
                     name = contact.name,
                     number = contact.number,
                     location = locationFor(contact.number) ?: contact.location,
@@ -482,7 +596,9 @@ private fun DialSearchResults(number: String, records: List<CallRecord>, onInfo:
                 item {
                     listOf("新建联系人" to R.drawable.oppo_pb_ic_add_contact,
                         "保存到已有联系人" to R.drawable.oppo_pb_ic_save_to_exist_contact).forEachIndexed { index, (label, drawable) ->
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth().clickable {
+                            if (index == 0) onCreateContact(number) else onSaveExisting(number)
+                        }.padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
                             Image(painterResource(drawable), null, Modifier.size(24.dp))
                             Text(label, Modifier.padding(start = 16.dp), style = oppoTextStyle(16.sp, weight = FontWeight.Medium))
                         }
@@ -507,12 +623,13 @@ private fun DialSearchRow(
     onInfo: () -> Unit,
     showDivider: Boolean,
     recentCall: Boolean = false,
+    onCall: () -> Unit,
 ) {
-    val displayNumber = remember(number) { formatDialNumber(number) }
+    val displayNumber = remember(number) { number.filter { it.isDigit() || it in "+*#" } }
     // CallLogAdapter.bindViewInSearchMode hides the call-type icon and replaces
     // call_time with attribution. The name/number starts at 16dp in this mode.
     Column {
-        Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 70.dp).clickable(onClick = onCall).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).padding(top = 10.dp, bottom = 10.dp, end = 5.dp)) {
                 if (name != null) {
                     Text(name, style = oppoTextStyle(16.sp, weight = FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -523,7 +640,7 @@ private fun DialSearchRow(
                 }
             }
             Text(location.orEmpty(), style = oppoTextStyle(14.sp, OppoSecondary),
-                modifier = Modifier.widthIn(max = 100.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End)
+                modifier = Modifier.widthIn(max = 100.dp), maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End)
             Box(Modifier.padding(end = 6.dp).size(width = 44.dp, height = 64.dp).clickable(onClick = onInfo), contentAlignment = Alignment.Center) {
                 Image(painterResource(R.drawable.oppo_pb_dr_detail_normal), "详情", Modifier.size(24.dp))
             }
@@ -565,7 +682,7 @@ private fun DialPadFab(modifier: Modifier = Modifier, onClick: () -> Unit) {
 @Composable
 private fun BottomNavigationBar(selectedTab: PhoneTab, onSelected: (PhoneTab) -> Unit) {
     // ContactsTabActivity uses contact_bottom_tab_height=56dp, 24dp icons and 10sp labels.
-    Row(modifier = Modifier.fillMaxWidth().height(56.dp).background(Color.White), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier = Modifier.fillMaxWidth().height(56.dp).background(Color(0xFFFAFAFA)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         PhoneTab.entries.forEach { tab ->
             val selected = selectedTab == tab
             Column(

@@ -167,6 +167,14 @@ class ManualCallStore(context: Context) {
         appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
     }
 
+    suspend fun deleteRecords(records: List<CallRecord>) {
+        database.withTransaction {
+            records.mapNotNull { it.storedId }.distinct().forEach { dao.deleteById(it) }
+            records.mapNotNull { it.demoIndex }.distinct().forEach { dao.hideDemo(HiddenDemoCallEntity(it)) }
+        }
+        appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
+    }
+
     suspend fun importLegacyRecords() = withContext(Dispatchers.IO) {
         importMutex.withLock {
             val preferences = appContext.getSharedPreferences("manual_call_records", Context.MODE_PRIVATE)

@@ -24,6 +24,9 @@ data class CallRecord(
     val storedId: String? = null,
     val demoIndex: Int? = null,
     val isUnanswered: Boolean = kind == CallKind.MISSED || kind == CallKind.BLOCKED,
+    val timeMillis: Long = 0,
+    val attribution: String? = null,
+    val operator: String? = null,
 )
 
 data class ContactMatch(

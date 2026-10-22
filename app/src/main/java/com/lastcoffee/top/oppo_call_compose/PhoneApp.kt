@@ -24,6 +24,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
 import com.lastcoffee.top.oppo_call_compose.data.ManualCallStore
+import com.lastcoffee.top.oppo_call_compose.data.LocalContactsStore
 import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
 import com.lastcoffee.top.oppo_call_compose.data.PhoneAttributionStore
 import com.lastcoffee.top.oppo_call_compose.data.mobileForLookup
@@ -78,6 +79,8 @@ private data class InCallRoute(val number: String, val mode: CallAudioMode, val 
 fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {}) {
     val context = LocalContext.current
     val manualCallStore = remember(context) { ManualCallStore(context) }
+    val contactsStore = remember(context) { LocalContactsStore(context) }
+    val contacts by contactsStore.contacts.collectAsState()
     val extrasStore = remember(context) { PhoneExtrasStore(context) }
     val extras by extrasStore.settings.collectAsState()
     val attributionStore = remember(context) { PhoneAttributionStore(context) }
@@ -165,6 +168,11 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                             }
                         },
                         onDial = onDial,
+                        contacts = contacts,
+                        onSaveContact = contactsStore::save,
+                        onDeleteRecords = { selected ->
+                            try { manualCallStore.deleteRecords(selected); true } catch (_: Exception) { false }
+                        },
                     )
                 }
                 entry<SearchRoute> {
@@ -177,6 +185,8 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                             ContactsScreen(
                                 onShowContact = { backStack.add(ContactDetailRoute(it)) },
                                 startSearching = true,
+                                contacts = contacts,
+                                onSaveContact = contactsStore::save,
                                 onExitSearch = { backStack.removeLastOrNull() },
                             )
                         }

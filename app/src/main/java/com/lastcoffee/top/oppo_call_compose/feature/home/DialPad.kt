@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,10 +29,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lastcoffee.top.oppo_call_compose.R
@@ -83,7 +86,13 @@ internal fun OppoDialNumberHeader(number: String, location: String?, showDivider
 }
 
 @Composable
-internal fun OppoDialPad(number: String, onNumberChange: (String) -> Unit, onDial: () -> Unit, onDismiss: () -> Unit) {
+internal fun OppoDialPad(
+    number: String,
+    onNumberChange: (String) -> Unit,
+    onDial: () -> Unit,
+    onDismiss: () -> Unit,
+    simLabels: List<String> = emptyList(),
+) {
     // dialpad_container.xml + DialpadView: 346dp, 4 x 58dp keys, 20dp grid top,
     // 56dp bottom controls and 20dp bottom padding. pb_bg_dialer.9.png supplies the handle.
     Box(Modifier.fillMaxWidth().height(346.dp)) {
@@ -102,26 +111,20 @@ internal fun OppoDialPad(number: String, onNumberChange: (String) -> Unit, onDia
                 dialKeys.chunked(3).forEach { row ->
                     Row(Modifier.fillMaxWidth().height(58.dp)) {
                         row.forEach { key ->
-                            Column(
-                                Modifier.weight(1f).height(58.dp).clickable(onClickLabel = "输入${key.digit}") {
-                                    onNumberChange(number + key.digit)
-                                },
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
+                            Box(
+                                Modifier.weight(1f).height(58.dp).combinedClickable(
+                                    onClickLabel = "输入${key.digit}",
+                                    onClick = { onNumberChange(number + key.digit) },
+                                    onLongClick = when {
+                                        key.digit == "0" -> ({ onNumberChange(number + "+") })
+                                        key.digit == "*" && number.isNotEmpty() -> ({ onNumberChange(number + ",") })
+                                        key.digit == "#" && number.isNotEmpty() -> ({ onNumberChange(number + ";") })
+                                        else -> null
+                                    },
+                                ),
+                                contentAlignment = Alignment.Center,
                             ) {
-                                if (key.drawable != null) {
-                                    Image(painterResource(key.drawable), key.digit)
-                                } else {
-                                    Text(key.digit, style = oppoTextStyle(28.sp, OppoPrimary, FontWeight.Medium))
-                                }
-                                if (key.digit == "1") {
-                                    Image(
-                                        painterResource(R.drawable.oppo_pb_ic_dial_key_voicemail), "语音信箱",
-                                        Modifier.padding(top = 4.dp).size(14.dp, 8.dp),
-                                    )
-                                } else {
-                                    Text(key.letters, style = oppoTextStyle(10.sp, OppoSecondary))
-                                }
+                                OppoDialKeyContent(key)
                             }
                         }
                     }
@@ -134,12 +137,21 @@ internal fun OppoDialPad(number: String, onNumberChange: (String) -> Unit, onDia
                 Box(Modifier.weight(1f).height(56.dp).clickable(onClick = onDismiss), contentAlignment = Alignment.Center) {
                     Image(painterResource(R.drawable.oppo_pb_ic_hide_dial), "收起拨号盘", Modifier.size(24.dp))
                 }
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Box(
-                        Modifier.size(56.dp).clip(CircleShape).background(Color(0xFF00BD13)).clickable(onClick = onDial),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Image(painterResource(R.drawable.oppo_pb_ic_dial_call), "拨打", Modifier.size(36.dp))
+                if (simLabels.size > 1) {
+                    Row(Modifier.width(222.dp).height(40.dp)) {
+                        simLabels.take(2).forEachIndexed { index, label ->
+                            if (index > 0) Spacer(Modifier.width(10.dp))
+                            OppoSimDialButton(index, label, onDial)
+                        }
+                    }
+                } else {
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier.size(56.dp).clip(CircleShape).background(Color(0xFF00BD13)).clickable(onClick = onDial),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Image(painterResource(R.drawable.oppo_pb_ic_dial_call), "拨打", Modifier.size(36.dp))
+                        }
                     }
                 }
                 Box(
@@ -157,5 +169,73 @@ internal fun OppoDialPad(number: String, onNumberChange: (String) -> Unit, onDia
             }
             Spacer(Modifier.height(20.dp))
         }
+    }
+}
+
+@Composable
+private fun OppoDialKeyContent(key: DialKey) {
+    // dialpad_button.xml uses DP_28 / DP_10 rather than scaled font units.
+    val density = LocalDensity.current
+    val numberSize = with(density) { 28.dp.toSp() }
+    val letterSize = with(density) { 10.dp.toSp() }
+    Layout(
+        modifier = Modifier.fillMaxSize(),
+        content = {
+            if (key.drawable != null) {
+                Image(painterResource(key.drawable), key.digit)
+            } else {
+                Text(key.digit, style = oppoTextStyle(numberSize, OppoPrimary, FontWeight.Medium))
+            }
+            if (key.digit == "1") {
+                Image(
+                    painterResource(R.drawable.oppo_pb_ic_dial_key_voicemail), "语音信箱",
+                    Modifier.padding(top = 4.dp).size(14.dp, 8.dp),
+                )
+            } else {
+                Text(
+                    key.letters,
+                    modifier = Modifier.padding(top = when (key.digit) {
+                        "*" -> 3.dp
+                        "#" -> 6.dp
+                        else -> 0.dp
+                    }),
+                    style = oppoTextStyle(letterSize, OppoSecondary),
+                )
+            }
+        },
+    ) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity)
+        val digit = measurables[0].measure(loose)
+        val letters = measurables[1].measure(loose)
+        // DialpadImageButton.p uses negative margins to bring the secondary
+        // label up under the digit; star and pound have their own icon margins.
+        val iconTop = if (key.drawable != null) 6.dp.roundToPx() else 0
+        val overlap = (if (key.drawable != null) 8.dp else 6.dp).roundToPx()
+        val placeholder = if (key.digit == "1") 2.dp.roundToPx() else 0
+        val contentHeight = iconTop + digit.height - overlap + letters.height + placeholder
+        val top = (constraints.maxHeight - contentHeight) / 2
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            digit.placeRelative((constraints.maxWidth - digit.width) / 2, top + iconTop)
+            letters.placeRelative((constraints.maxWidth - letters.width) / 2, top + iconTop + digit.height - overlap)
+        }
+    }
+}
+
+@Composable
+private fun OppoSimDialButton(index: Int, label: String, onDial: () -> Unit) {
+    val textSize = with(LocalDensity.current) { 12.dp.toSp() }
+    Row(
+        Modifier.size(106.dp, 40.dp).clip(RoundedCornerShape(20.dp))
+            .background(Color(0xFF00BD13)).clickable(onClick = onDial).padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Image(
+            painterResource(if (index == 0) R.drawable.oppo_contacts_pb_ic_dial_call_sim1 else R.drawable.oppo_contacts_pb_ic_dial_call_sim2),
+            contentDescription = "使用SIM${index + 1}拨打",
+            modifier = Modifier.size(20.dp),
+        )
+        Text(label, Modifier.widthIn(max = 74.dp).padding(start = 4.dp),
+            style = oppoTextStyle(textSize, Color.White), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
