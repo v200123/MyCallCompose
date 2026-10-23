@@ -42,6 +42,8 @@ import com.lastcoffee.top.oppo_call_compose.ui.common.OppoDivider
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoPrimary
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoSecondary
 import com.lastcoffee.top.oppo_call_compose.ui.common.oppoTextStyle
+import com.lastcoffee.top.oppo_call_compose.ui.common.rememberDialpadTone
+import com.lastcoffee.top.oppo_call_compose.ui.common.rememberDialpadToneInteractionSource
 
 private data class DialKey(val digit: String, val letters: String, val drawable: Int? = null)
 
@@ -92,7 +94,9 @@ internal fun OppoDialPad(
     onDial: () -> Unit,
     onDismiss: () -> Unit,
     simLabels: List<String> = emptyList(),
+    dialpadToneEnabled: Boolean = false,
 ) {
+    val playTone = rememberDialpadTone(dialpadToneEnabled)
     // dialpad_container.xml + DialpadView: 346dp, 4 x 58dp keys, 20dp grid top,
     // 56dp bottom controls and 20dp bottom padding. pb_bg_dialer.9.png supplies the handle.
     Box(Modifier.fillMaxWidth().height(346.dp)) {
@@ -111,8 +115,10 @@ internal fun OppoDialPad(
                 dialKeys.chunked(3).forEach { row ->
                     Row(Modifier.fillMaxWidth().height(58.dp)) {
                         row.forEach { key ->
+                            val interactionSource = rememberDialpadToneInteractionSource(key.digit, playTone)
                             Box(
                                 Modifier.weight(1f).height(58.dp).combinedClickable(
+                                    interactionSource = interactionSource,
                                     onClickLabel = "输入${key.digit}",
                                     onClick = { onNumberChange(number + key.digit) },
                                     onLongClick = when {

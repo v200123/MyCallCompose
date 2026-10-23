@@ -35,9 +35,10 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-class ManualCallStore(context: Context) {
+class ManualCallStore internal constructor(context: Context, private val database: ManualCallDatabase) {
+    constructor(context: Context) : this(context, openManualCallDatabase(context.applicationContext))
+
     private val appContext = context.applicationContext
-    private val database = openManualCallDatabase(appContext)
     private val dao = database.manualCallDao()
     private val importMutex = Mutex()
     private val configurationMutex = Mutex()

@@ -112,7 +112,7 @@ fun CallModeSettingsScreen(
 ) {
     SettingsFrame("通话规则与音频", onBack) {
         Text("新号码默认归入所选音频池；号码已存在时沿用原归属。", color = Color(0xFF707782), modifier = Modifier.padding(horizontal = 16.dp))
-        CallAudioMode.entries.filter { it != CallAudioMode.STATUS_SOUND }.forEach { mode ->
+        CallAudioMode.entries.filter { it.isCallMode }.forEach { mode ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)
                     .background(Color.White, RoundedCornerShape(16.dp)).clickable { onSelectMode(mode) }.padding(16.dp),
@@ -280,11 +280,11 @@ private fun StatusEditorDialog(
                                 Text("状态期间音频", modifier = Modifier.weight(1f))
                                 Box {
                                     TextButton(onClick = { mediaMenu = true }) {
-                                        Text(mediaEntries.firstOrNull { it.id == mediaEntryId && it.mode != CallAudioMode.STATUS_SOUND && it.mode.acceptsMimeType(it.mimeType) }?.title ?: "号码音频池随机")
+                                        Text(mediaEntries.firstOrNull { it.id == mediaEntryId && it.mode.isCallMode && it.mode.acceptsMimeType(it.mimeType) }?.title ?: "号码音频池随机")
                                     }
                                     DropdownMenu(mediaMenu, { mediaMenu = false }) {
                                         DropdownMenuItem(text = { Text("号码音频池随机") }, onClick = { mediaEntryId = null; mediaMenu = false })
-                                        mediaEntries.filter { it.mode != CallAudioMode.STATUS_SOUND && it.mode.acceptsMimeType(it.mimeType) }.forEach { media ->
+                                        mediaEntries.filter { it.mode.isCallMode && it.mode.acceptsMimeType(it.mimeType) }.forEach { media ->
                                             DropdownMenuItem(
                                                 text = { Text(media.mode.title + " · " + media.title) },
                                                 onClick = { mediaEntryId = media.id; mediaMenu = false },
@@ -645,6 +645,7 @@ fun CallMediaLibraryScreen(
                 CallAudioMode.RINGBACK -> "彩铃仅支持视频，可添加多个。"
                 CallAudioMode.MUSIC -> "音乐仅支持音频，可添加多个。"
                 CallAudioMode.STATUS_SOUND -> "状态提示音仅支持音频。"
+                CallAudioMode.DIALPAD_TONE -> "拨号按键音仅支持音频。"
             },
             color = Color(0xFF707782),
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -754,7 +755,7 @@ private fun NumberPoolBindingEditor(
         text = { Column {
             Box { TextButton(onClick = { modeMenu = true }) { Text("音频模式：${mode.title}") }
                 DropdownMenu(modeMenu, { modeMenu = false }) {
-                    CallAudioMode.entries.filter { it != CallAudioMode.STATUS_SOUND }.forEach { option ->
+                    CallAudioMode.entries.filter { it.isCallMode }.forEach { option ->
                         DropdownMenuItem(text = { Text(option.title) }, onClick = { mode = option; modeMenu = false })
                     }
                 }

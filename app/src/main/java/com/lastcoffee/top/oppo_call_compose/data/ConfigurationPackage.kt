@@ -63,7 +63,8 @@ class ConfigurationPackage(
         val assetsRoot = File(appContext.filesDir, "call_media").canonicalFile
         val files = mutableListOf<Pair<String, File>>()
         val mediaJson = JSONArray()
-        state.mediaEntries.forEachIndexed { index, media ->
+        // Accept uploaded key sounds in older packages, but omit these unused files from new exports.
+        state.mediaEntries.filter { it.mode != CallAudioMode.DIALPAD_TONE }.forEachIndexed { index, media ->
             fun asset(path: String, folder: String): String {
                 val source = File(path).canonicalFile
                 require(source.isFile && source.toPath().startsWith(assetsRoot.toPath())) {

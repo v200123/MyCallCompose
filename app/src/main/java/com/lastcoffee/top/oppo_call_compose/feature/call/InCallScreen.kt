@@ -96,6 +96,8 @@ import com.lastcoffee.top.oppo_call_compose.data.BadgeRule
 import com.lastcoffee.top.oppo_call_compose.data.normalizePhoneNumber
 import com.lastcoffee.top.oppo_call_compose.ui.common.InCallButtonSurface
 import com.lastcoffee.top.oppo_call_compose.ui.common.InCallPreviewBackdrop
+import com.lastcoffee.top.oppo_call_compose.ui.common.rememberDialpadTone
+import com.lastcoffee.top.oppo_call_compose.ui.common.rememberDialpadToneInteractionSource
 import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
 import com.lastcoffee.top.oppo_call_compose.ui.theme.OPPO_Call_ComposeTheme
 import kotlinx.coroutines.delay
@@ -193,7 +195,7 @@ internal fun InCallScreen(
             }
             selected ?: mediaEntries.firstOrNull { it.mode == CallAudioMode.DEFAULT_TONE && it.mimeType.startsWith("audio/") && File(it.filePath).isFile }
         } else {
-            mediaEntries.firstOrNull { it.id == activeRule.mediaEntryId && it.mode != CallAudioMode.STATUS_SOUND && it.mode.acceptsMimeType(it.mimeType) && File(it.filePath).isFile && (!extras.blocksRingback(number) || !it.mimeType.startsWith("video/")) }
+            mediaEntries.firstOrNull { it.id == activeRule.mediaEntryId && it.mode.isCallMode && it.mode.acceptsMimeType(it.mimeType) && File(it.filePath).isFile && (!extras.blocksRingback(number) || !it.mimeType.startsWith("video/")) }
                 ?: mediaForMode.filter { !it.mimeType.startsWith("video/") }.randomOrNull()
         }
     }
@@ -587,7 +589,8 @@ internal fun InCallScreen(
             }
 
             if (dialpadOpen) {
-                InCallDtmfPad(digits = dtmfDigits, onDigit = { dtmfDigits += it }, onClose = { dialpadOpen = false })
+                InCallDtmfPad(digits = dtmfDigits, onDigit = { dtmfDigits += it }, onClose = { dialpadOpen = false },
+                    toneEnabled = extras.dialpadToneEnabled)
             } else {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
                     Row(modifier = Modifier.fillMaxWidth()) {
@@ -736,14 +739,16 @@ private fun InCallAction(label: String, icon: Painter?, selected: Boolean, enabl
 private fun CallVisualStyle.textColor(fallback: Color): Color = textColorArgb?.let { Color(it.toULong()) } ?: fallback
 
 @Composable
-private fun InCallDtmfPad(digits: String, onDigit: (String) -> Unit, onClose: () -> Unit) {
+private fun InCallDtmfPad(digits: String, onDigit: (String) -> Unit, onClose: () -> Unit, toneEnabled: Boolean) {
+    val playTone = rememberDialpadTone(toneEnabled)
     val keys = listOf("1" to "", "2" to "ABC", "3" to "DEF", "4" to "GHI", "5" to "JKL", "6" to "MNO", "7" to "PQRS", "8" to "TUV", "9" to "WXYZ", "*" to "", "0" to "+", "#" to "")
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(digits, color = Color.White, fontSize = 20.sp, maxLines = 1, modifier = Modifier.height(28.dp))
         keys.chunked(3).forEach { row ->
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 row.forEach { (digit, letters) ->
-                    Column(modifier = Modifier.width(78.dp).height(54.dp).clickable { onDigit(digit) }, horizontalAlignment = Alignment.CenterHorizontally) {
+                    val interactionSource = rememberDialpadToneInteractionSource(digit, playTone)
+                    Column(modifier = Modifier.width(78.dp).height(54.dp).clickable(interactionSource = interactionSource) { onDigit(digit) }, horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(digit, color = Color.White, fontSize = 28.sp, lineHeight = 30.sp)
                         Text(letters, color = Color(0xFFB8B8B8), fontSize = 10.sp)
                     }

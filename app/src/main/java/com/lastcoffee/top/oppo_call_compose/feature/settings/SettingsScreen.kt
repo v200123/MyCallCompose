@@ -124,6 +124,7 @@ fun SettingsScreen(
                 }
             }
             Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            DialpadToneSettings(extras)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp)
                     .background(Color.White, RoundedCornerShape(20.dp))

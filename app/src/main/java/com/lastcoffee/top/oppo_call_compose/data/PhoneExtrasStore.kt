@@ -53,6 +53,7 @@ data class PhoneExtras(
     val promptNumbers: Map<String, CallPromptType> = emptyMap(),
     val statusBindings: Map<String, String> = emptyMap(),
     val promptCategoryRules: Map<CallPromptType, String> = emptyMap(),
+    val dialpadToneEnabled: Boolean = false,
 ) {
     fun locationFor(number: String): String? = customLocationMatch(number)?.location?.displayText
 
@@ -112,6 +113,8 @@ class PhoneExtrasStore(context: Context) {
     fun clearLocations() = update { it.copy(locations = emptyMap()) }
 
     fun setDefaultRingback(id: String?) = update { it.copy(defaultRingbackId = id) }
+
+    fun setDialpadToneEnabled(enabled: Boolean) = update { it.copy(dialpadToneEnabled = enabled) }
 
     fun bindRingback(number: String, id: String?) = update {
         val normalized = normalizePhoneNumber(number)
@@ -198,6 +201,7 @@ class PhoneExtrasStore(context: Context) {
         put("promptNumbers", JSONObject(value.promptNumbers.mapValues { it.value.name }))
         put("statusBindings", JSONObject(value.statusBindings))
         put("promptCategoryRules", JSONObject(value.promptCategoryRules.mapKeys { it.key.name }))
+        put("dialpadToneEnabled", value.dialpadToneEnabled)
     }
 
     private fun decode(raw: String?): PhoneExtras = runCatching {
@@ -278,6 +282,7 @@ class PhoneExtrasStore(context: Context) {
             promptNumbers,
             statusBindings,
             promptCategoryRules,
+            dialpadToneEnabled = root.optBoolean("dialpadToneEnabled", false),
         )
     }.getOrDefault(PhoneExtras())
 }

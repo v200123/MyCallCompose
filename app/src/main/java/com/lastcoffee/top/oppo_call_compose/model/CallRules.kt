@@ -2,10 +2,14 @@ package com.lastcoffee.top.oppo_call_compose.model
 
 /** Audio collection assigned to a simulated phone number. */
 enum class CallAudioMode(val title: String) {
-    DEFAULT_TONE("普通铃声"), RINGBACK("彩铃"), MUSIC("音乐"), STATUS_SOUND("状态音效");
+    DEFAULT_TONE("普通铃声"), RINGBACK("彩铃"), MUSIC("音乐"), STATUS_SOUND("状态音效"), DIALPAD_TONE("拨号按键音");
+
+    // DIALPAD_TONE is retained only to read media from older configuration packages.
+
+    val isCallMode: Boolean get() = this == DEFAULT_TONE || this == RINGBACK || this == MUSIC
 
     fun acceptsMimeType(mimeType: String): Boolean = when (this) {
-        DEFAULT_TONE, MUSIC, STATUS_SOUND -> mimeType.startsWith("audio/")
+        DEFAULT_TONE, MUSIC, STATUS_SOUND, DIALPAD_TONE -> mimeType.startsWith("audio/")
         RINGBACK -> mimeType.startsWith("video/")
     }
 

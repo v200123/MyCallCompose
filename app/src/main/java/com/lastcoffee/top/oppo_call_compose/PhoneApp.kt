@@ -169,6 +169,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                         },
                         onDial = onDial,
                         contacts = contacts,
+                        dialpadToneEnabled = extras.dialpadToneEnabled,
                         onSaveContact = contactsStore::save,
                         onDeleteRecords = { selected ->
                             try { manualCallStore.deleteRecords(selected); true } catch (_: Exception) { false }

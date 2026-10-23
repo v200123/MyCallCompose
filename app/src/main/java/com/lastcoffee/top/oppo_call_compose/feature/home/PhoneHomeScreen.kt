@@ -129,6 +129,7 @@ internal fun PhoneHomeScreen(
     contacts: List<ContactMatch> = demoContacts,
     onSaveContact: (ContactMatch) -> Unit = {},
     onDeleteRecords: suspend (List<CallRecord>) -> Boolean = { false },
+    dialpadToneEnabled: Boolean = false,
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(PhoneTab.CALLS) }
     var dialPadVisible by rememberSaveable { mutableStateOf(true) }
@@ -180,6 +181,7 @@ internal fun PhoneHomeScreen(
                         onClearCalls = onClearCalls,
                         contacts = contacts,
                         simLabels = simLabels,
+                        dialpadToneEnabled = dialpadToneEnabled,
                         onDeleteRecords = onDeleteRecords,
                         onCreateContact = { newContactNumber = it; selectedTab = PhoneTab.CONTACTS },
                         onSaveExisting = { existingContactNumber = it; selectedTab = PhoneTab.CONTACTS },
@@ -219,6 +221,7 @@ private fun CallsScreen(
     onClearCalls: suspend () -> Boolean,
     contacts: List<ContactMatch>,
     simLabels: List<String>,
+    dialpadToneEnabled: Boolean,
     onDeleteRecords: suspend (List<CallRecord>) -> Boolean,
     onCreateContact: (String) -> Unit,
     onSaveExisting: (String) -> Unit,
@@ -330,6 +333,7 @@ private fun CallsScreen(
                 onDial = { onDial(dialedNumber) },
                 onDismiss = onHideDialPad,
                 simLabels = simLabels,
+                dialpadToneEnabled = dialpadToneEnabled,
             )
         }
         if (editing) {
