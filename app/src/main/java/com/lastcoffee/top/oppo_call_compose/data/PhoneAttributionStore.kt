@@ -20,7 +20,7 @@ class PhoneAttributionStore(context: Context) {
         val json = JSONObject(preferences.getString("by_prefix", "{}") ?: "{}")
         buildMap {
             json.keys().forEach { key ->
-                json.optString(key).takeIf(String::isNotBlank)?.let { put(key, it) }
+                json.optString(key).takeIf(String::isNotBlank)?.let { put(key, normalizeCachedPhoneLocation(it)) }
             }
         }
     }.getOrDefault(emptyMap())
@@ -83,7 +83,7 @@ class PhoneAttributionStore(context: Context) {
             val province = region?.province.orEmpty()
             val city = region?.city.orEmpty().takeUnless { it == province }.orEmpty()
             val carrier = info?.isp?.cnName.orEmpty().removePrefix("中国")
-            val result = listOf(province, city, carrier).filter(String::isNotBlank).joinToString(" ").takeIf {
+            val result = formatPhoneLocation(province, city, carrier).takeIf {
                 province.isNotBlank() && province != "未知" && carrier.isNotBlank() && carrier != "未知"
             }
             if (result == null) log("local_miss", mobile) else log("local_hit", mobile, "location=$result")
@@ -116,7 +116,7 @@ class PhoneAttributionStore(context: Context) {
                 val city = json.optString("city").takeUnless { it == province }.orEmpty()
                 val carrier = sequenceOf("sp", "carrier", "isp")
                     .map(json::optString).firstOrNull(String::isNotBlank).orEmpty().removePrefix("中国")
-                val result = listOf(province, city, carrier).filter(String::isNotBlank).joinToString(" ").takeIf(String::isNotBlank)
+                val result = formatPhoneLocation(province, city, carrier).takeIf(String::isNotBlank)
                 if (result == null) log("api_empty", mobile, warning = true)
                 else log("api_hit", mobile, "location=$result")
                 result
@@ -141,6 +141,11 @@ class PhoneAttributionStore(context: Context) {
         val message = "$event number=$masked${if (detail.isBlank()) "" else " $detail"}"
         if (warning) Log.w("PhoneLocation", message) else Log.d("PhoneLocation", message)
     }
+}
+
+internal fun normalizeCachedPhoneLocation(value: String): String {
+    val parts = value.trim().split(Regex("\\s+"))
+    return if (parts.size == 3) "${parts[0]}${parts[1]} ${parts[2]}" else value.trim()
 }
 
 internal fun mobileForLookup(number: String): String? {

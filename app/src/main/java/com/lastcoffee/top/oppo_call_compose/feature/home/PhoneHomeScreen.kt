@@ -84,8 +84,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lastcoffee.top.oppo_call_compose.R
-import com.lastcoffee.top.oppo_call_compose.data.demoContacts
-import com.lastcoffee.top.oppo_call_compose.data.demoCalls
 import com.lastcoffee.top.oppo_call_compose.feature.contacts.ContactsScreen
 import com.lastcoffee.top.oppo_call_compose.model.CallKind
 import com.lastcoffee.top.oppo_call_compose.model.CallRecord
@@ -119,17 +117,18 @@ internal fun PhoneHomeScreen(
     onLookupLocation: (String) -> Unit = {},
     onShowDetail: (CallRecord) -> Unit,
     onShowContact: (ContactMatch) -> Unit,
-    onStartCall: (String) -> Unit,
+    onStartCall: (String, Int) -> Unit,
     onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
     pendingDialNumber: String?,
     onDialRequestConsumed: () -> Unit,
     onClearCalls: suspend () -> Boolean,
     onDial: (String) -> Unit,
-    contacts: List<ContactMatch> = demoContacts,
+    contacts: List<ContactMatch> = emptyList(),
     onSaveContact: (ContactMatch) -> Unit = {},
     onDeleteRecords: suspend (List<CallRecord>) -> Boolean = { false },
     dialpadToneEnabled: Boolean = false,
+    dualSimDisplayEnabled: Boolean = false,
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(PhoneTab.CALLS) }
     var dialPadVisible by rememberSaveable { mutableStateOf(true) }
@@ -137,7 +136,7 @@ internal fun PhoneHomeScreen(
     var newContactNumber by rememberSaveable { mutableStateOf<String?>(null) }
     var existingContactNumber by rememberSaveable { mutableStateOf<String?>(null) }
     val context = LocalContext.current
-    val simLabels = remember(context) { homeSimLabels(context) }
+    val simLabels = remember(context, dualSimDisplayEnabled) { homeSimLabels(context, dualSimDisplayEnabled) }
     LaunchedEffect(dialedNumber) { onLookupLocation(dialedNumber) }
     LaunchedEffect(pendingDialNumber) {
         if (pendingDialNumber != null) {
@@ -173,8 +172,9 @@ internal fun PhoneHomeScreen(
                         },
                         onDialNumberChange = { dialedNumber = it },
                         onDial = { number ->
-                            if (number.isNotBlank()) onStartCall(number) else onDial(number)
+                            if (number.isNotBlank()) onStartCall(number, 1) else onDial(number)
                         },
+                        onDialWithSim = onStartCall,
                         onShowDetail = onShowDetail,
                         onOpenSearch = onOpenSearch,
                         onOpenSettings = onOpenSettings,
@@ -215,6 +215,7 @@ private fun CallsScreen(
     onHideDialPad: () -> Unit,
     onDialNumberChange: (String) -> Unit,
     onDial: (String) -> Unit,
+    onDialWithSim: (String, Int) -> Unit,
     onShowDetail: (CallRecord) -> Unit,
     onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -330,7 +331,7 @@ private fun CallsScreen(
             OppoDialPad(
                 number = dialedNumber,
                 onNumberChange = onDialNumberChange,
-                onDial = { onDial(dialedNumber) },
+                onDial = { slot -> if (dialedNumber.isNotBlank()) onDialWithSim(dialedNumber, slot) else onDial(dialedNumber) },
                 onDismiss = onHideDialPad,
                 simLabels = simLabels,
                 dialpadToneEnabled = dialpadToneEnabled,
@@ -530,12 +531,23 @@ private fun CallRow(record: CallRecord, location: String?, onInfo: () -> Unit, o
                 Text(title, style = oppoTextStyle(16.sp, primaryColor, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 FlowRow(Modifier.padding(top = 2.dp), verticalArrangement = Arrangement.Center) {
                     if (showSim) {
-                        Image(painterResource(R.drawable.ic_call_1_badge), "卡1", Modifier.align(Alignment.CenterVertically).size(15.dp, 13.dp))
+                        Box(
+                            Modifier.align(Alignment.CenterVertically).size(10.dp, 11.dp)
+                                .clip(RoundedCornerShape(2.dp)).background(Color(0xFFB8B8B8)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("1", color = Color.White, fontSize = 8.sp, lineHeight = 9.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(Modifier.width(4.dp))
                     }
                     val breeno = record.description.contains("小布通话")
                     if (breeno) Text("小布通话  ", style = oppoTextStyle(14.sp, OppoSecondary))
-                    Text(location.orEmpty().removePrefix("小布通话").trim(), style = oppoTextStyle(14.sp, OppoSecondary))
-                    record.tag?.let { Text(it, style = oppoTextStyle(14.sp, TagOrange)) }
+                    Text(location.orEmpty().removePrefix("小布通话").trim(),
+                        style = oppoTextStyle(14.sp, OppoSecondary))
+                    record.tag?.let {
+                        Spacer(Modifier.width(6.dp))
+                        Text(it, style = oppoTextStyle(14.sp, TagOrange))
+                    }
                 }
             }
             Text(homeCallDate(record), Modifier.align(Alignment.CenterVertically), style = oppoTextStyle(14.sp, OppoSecondary))
@@ -723,11 +735,11 @@ private fun SimpleDestination(title: String, subtitle: String, icon: ImageVector
 private fun PhoneHomePreview() {
     OPPO_Call_ComposeTheme(darkTheme = false, dynamicColor = false) {
         PhoneHomeScreen(
-            records = demoCalls,
+            records = emptyList(),
             locationFor = { null },
             onShowDetail = {},
             onShowContact = {},
-            onStartCall = {},
+            onStartCall = { _, _ -> },
             onOpenSearch = {},
             onOpenSettings = {},
             pendingDialNumber = null,
@@ -743,11 +755,11 @@ private fun PhoneHomePreview() {
 private fun PhoneDialPadPreview() {
     OPPO_Call_ComposeTheme(darkTheme = false, dynamicColor = false) {
         PhoneHomeScreen(
-            records = demoCalls,
+            records = emptyList(),
             locationFor = { null },
             onShowDetail = {},
             onShowContact = {},
-            onStartCall = {},
+            onStartCall = { _, _ -> },
             onOpenSearch = {},
             onOpenSettings = {},
             pendingDialNumber = "136",

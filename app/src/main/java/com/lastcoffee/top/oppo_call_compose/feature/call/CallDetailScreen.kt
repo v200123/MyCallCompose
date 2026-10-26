@@ -49,10 +49,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lastcoffee.top.oppo_call_compose.R
-import com.lastcoffee.top.oppo_call_compose.data.demoCalls
-import com.lastcoffee.top.oppo_call_compose.data.demoContacts
 import com.lastcoffee.top.oppo_call_compose.model.CallKind
 import com.lastcoffee.top.oppo_call_compose.model.CallRecord
+import com.lastcoffee.top.oppo_call_compose.model.ContactMatch
 import com.lastcoffee.top.oppo_call_compose.model.displayLabel
 import com.lastcoffee.top.oppo_call_compose.ui.common.MissedRed
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoCardPage
@@ -71,6 +70,7 @@ import kotlinx.coroutines.launch
 internal fun CallDetailScreen(
     record: CallRecord,
     allRecords: List<CallRecord>,
+    contacts: List<ContactMatch> = emptyList(),
     customLocation: String? = null,
     onBack: () -> Unit,
     onDial: (String) -> Unit,
@@ -78,9 +78,9 @@ internal fun CallDetailScreen(
     onDelete: suspend (CallRecord) -> Boolean = { false },
     fromContact: Boolean = false,
 ) {
-    val number = record.phoneNumber()
-    val contact = remember(record) {
-        demoContacts.firstOrNull { it.number.filter(Char::isDigit) == number || it.name == record.number }
+    val number = record.phoneNumber(contacts)
+    val contact = remember(record, contacts) {
+        contacts.firstOrNull { it.number.filter(Char::isDigit) == number || it.name == record.number }
     }
     val isEmergency = record.number == "紧急呼叫中心"
     val displayName = if (isEmergency) record.number else contact?.name ?: record.number
@@ -90,8 +90,8 @@ internal fun CallDetailScreen(
         record.description.filterNot(Char::isWhitespace).all(Char::isDigit) -> number
         else -> record.description.substringAfter('\n').removePrefix("小布通话").trim()
     }
-    val history = remember(record, allRecords) {
-        allRecords.filter { it.phoneNumber() == number }.ifEmpty { if (fromContact) emptyList() else listOf(record) }
+    val history = remember(record, allRecords, contacts) {
+        allRecords.filter { it.phoneNumber(contacts) == number }.ifEmpty { if (fromContact) emptyList() else listOf(record) }
     }
     var menuExpanded by remember { mutableStateOf(false) }
     var showAllHistory by remember(record) { mutableStateOf(false) }
@@ -214,10 +214,10 @@ internal fun CallDetailScreen(
     }
 }
 
-private fun CallRecord.phoneNumber(): String {
+private fun CallRecord.phoneNumber(contacts: List<ContactMatch>): String {
     val digits = number.filter(Char::isDigit)
     if (digits.isNotEmpty()) return digits
-    val contact = demoContacts.firstOrNull { it.name == number }
+    val contact = contacts.firstOrNull { it.name == number }
     return contact?.number?.filter(Char::isDigit) ?: description.filter(Char::isDigit)
 }
 
@@ -269,7 +269,7 @@ private fun CallHistoryItem(record: CallRecord) {
 @Preview(name = "OPPO 通话详情 · 未接通", showBackground = true, widthDp = 540, heightDp = 1176)
 @Composable
 private fun CallDetailPreview() {
-    val sample = CallRecord("136 5817 0135", "未知归属地", "2026/10/21", CallKind.OUTGOING,
+    val sample = CallRecord("10086", "未知归属地", "2026/10/21", CallKind.OUTGOING,
         detailTime = "2026/10/21 14:30", durationDetail = "呼出  未接通", isUnanswered = true)
     OPPO_Call_ComposeTheme(darkTheme = false, dynamicColor = false) {
         CallDetailScreen(
@@ -286,8 +286,8 @@ private fun CallDetailPreview() {
 private fun ContactCallDetailPreview() {
     OPPO_Call_ComposeTheme(darkTheme = false, dynamicColor = false) {
         CallDetailScreen(
-            record = demoCalls[5],
-            allRecords = demoCalls,
+            record = CallRecord("10086", "未知归属地", "2026/10/21", CallKind.OUTGOING),
+            allRecords = emptyList(),
             onBack = {},
             onDial = {},
         )

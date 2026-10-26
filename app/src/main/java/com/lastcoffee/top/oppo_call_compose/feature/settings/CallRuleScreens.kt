@@ -18,14 +18,11 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -34,25 +31,12 @@ import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.Dialpad
-import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.VideoCall
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -69,14 +53,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,19 +64,13 @@ import com.lastcoffee.top.oppo_call_compose.data.CallPromptType
 import com.lastcoffee.top.oppo_call_compose.data.PhoneExtras
 import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
 import com.lastcoffee.top.oppo_call_compose.data.normalizePhoneNumber
-import com.lastcoffee.top.oppo_call_compose.R
 import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
-import com.lastcoffee.top.oppo_call_compose.model.CallButtonId
-import com.lastcoffee.top.oppo_call_compose.model.CallButtonRule
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
+import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
 import com.lastcoffee.top.oppo_call_compose.model.CallMediaEntry
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
 import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
-import com.lastcoffee.top.oppo_call_compose.model.CallVisualStyle
-import com.lastcoffee.top.oppo_call_compose.model.defaultButtons
-import com.lastcoffee.top.oppo_call_compose.ui.common.InCallButtonSurface
-import com.lastcoffee.top.oppo_call_compose.ui.common.InCallEndRed
-import com.lastcoffee.top.oppo_call_compose.ui.common.InCallPreviewBackdrop
+import com.lastcoffee.top.oppo_call_compose.model.forVariant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -123,11 +96,11 @@ fun CallModeSettingsScreen(
                 TextButton(onClick = { onOpenLibrary(mode) }) { Text("管理库") }
             }
         }
-        SettingsLink("状态规则", "${config.statuses.size} 个状态", onOpenRules)
+        SettingsLink("状态规则", "无头像 / 有头像两套", onOpenRules)
     }
 }
 
-private val fixedStageStatusIds = setOf("dialing", "waiting", "no_answer", "busy", "empty_number", "powered_off", "unreachable", "active", "hold", "disconnecting", "disconnected")
+private val builtInStatusIds = setOf("dialing", "waiting", "no_answer", "busy", "empty_number", "powered_off", "unreachable", "active", "hold", "disconnecting", "disconnected")
 
 @Composable
 fun CallRulesScreen(
@@ -136,41 +109,53 @@ fun CallRulesScreen(
     mediaEntries: List<CallMediaEntry>,
     onAddMedia: suspend (CallMediaEntry) -> Unit,
     onBack: () -> Unit,
-    onSave: (CallFlowConfiguration) -> Unit,
+    onSave: (CallScreenVariant, CallFlowConfiguration) -> Unit,
 ) {
-    var current by remember(config) { mutableStateOf(config) }
+    var variant by remember { mutableStateOf(CallScreenVariant.WITHOUT_AVATAR) }
+    var current by remember(variant) { mutableStateOf(config.forVariant(variant)) }
     var editing by remember { mutableStateOf<CallStatusRule?>(null) }
-    var isNew by remember { mutableStateOf(false) }
-    SettingsFrame("状态规则", onBack, footer = {
-        Button(onClick = { isNew = true; editing = CallStatusRule(UUID.randomUUID().toString(), "新状态", CallStage.WAITING) }, modifier = Modifier.fillMaxWidth().padding(16.dp)) { Text("新增状态") }
-    }) {
-        Text("设为入口", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
+    SettingsFrame("${variant.title}规则", onBack) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CallScreenVariant.entries.forEach { option ->
+                if (variant == option) Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("${option.title}规则") }
+                else TextButton(onClick = { editing = null; variant = option }, modifier = Modifier.weight(1f)) { Text("${option.title}规则") }
+            }
+        }
+        Text("呼叫、等待、接通和结束的顺序由程序决定。这里调整各状态的显示文字、时长和音频播放。", color = Color(0xFF707782), modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(current.statuses, key = { it.id }) { status ->
-                val categoryCount = extras.promptCategoryRules.values.count { it == status.id }
-                val bindingCount = extras.statusBindings.values.count { it == status.id } +
-                    extras.promptNumbers.keys.count { extras.promptRuleFor(it) == status.id }
+                val categoryCount = extras.promptCategoryRulesFor(variant).values.count { it == status.id }
+                val bindingCount = extras.promptNumbers.keys.count {
+                    extras.screenVariantFor(it) == variant && extras.promptRuleFor(it) == status.id
+                }
                 Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)) {
                     Column(Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(status.name, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
                                 Text("${status.stage.title} · ${if (status.durationSeconds > 0) "${status.durationSeconds} 秒" else "不自动计时"}", color = Color(0xFF707782))
+                                val audioName = if (status.playSoundOnce) {
+                                    if (status.soundMuted) "静音" else mediaEntries.firstOrNull { it.id == status.soundEntryId }?.title ?: "未选择提示音"
+                                } else mediaEntries.firstOrNull { it.id == status.mediaEntryId }?.title ?: "号码音频池随机"
+                                val playCount = if (status.playSoundOnce) "播放一次" else when (status.audioPlayCount) {
+                                    0 -> "无限循环"
+                                    1 -> "播放一次"
+                                    else -> "播放 ${status.audioPlayCount} 次"
+                                }
+                                Text("$audioName · $playCount", color = Color(0xFF707782), fontSize = 12.sp)
                             }
-                            RadioButton(current.initialStatusId == status.id, onClick = {
-                                current = current.copy(initialStatusId = status.id); onSave(current)
-                            })
                             TextButton(onClick = { editing = status }) { Text("编辑") }
-                            if (status.id !in fixedStageStatusIds && bindingCount == 0 && categoryCount == 0) {
+                            if (status.id !in builtInStatusIds && bindingCount == 0 && categoryCount == 0 && current.statuses.none { other ->
+                                    other.id != status.id && (other.timeoutTargetId == status.id || other.buttons.any { it.targetStatusId == status.id })
+                                }) {
                                 IconButton(onClick = {
-                                    current = current.copy(statuses = current.statuses.filterNot { it.id == status.id }, initialStatusId = current.initialStatusId.takeUnless { it == status.id } ?: "dialing")
-                                    onSave(current)
+                                    current = current.copy(statuses = current.statuses.filterNot { it.id == status.id })
+                                    onSave(variant, current)
                                 }) { Icon(Icons.Default.Delete, contentDescription = "删除状态") }
                             }
                         }
                         if (bindingCount > 0) Text("已绑定 $bindingCount 个号码", color = Color(0xFF707782), fontSize = 12.sp)
                         if (categoryCount > 0) Text("用于 $categoryCount 类提示音", color = Color(0xFF707782), fontSize = 12.sp)
-                        status.timeoutTargetId?.let { target -> Text("到期跳转：${current.statuses.firstOrNull { it.id == target }?.name ?: target}", color = Color(0xFF707782)) }
                     }
                 }
             }
@@ -178,12 +163,11 @@ fun CallRulesScreen(
     }
     editing?.let { status ->
         StatusEditorDialog(
-            initial = status, statuses = current.statuses, mediaEntries = mediaEntries, onAddMedia = onAddMedia,
-            stageEditable = isNew || (status.id !in fixedStageStatusIds && extras.promptCategoryRules.values.none { it == status.id }),
+            initial = status, mediaEntries = mediaEntries, onAddMedia = onAddMedia,
             onDismiss = { editing = null },
             onApply = { updated ->
-                current = if (isNew) current.copy(statuses = current.statuses + updated) else current.copy(statuses = current.statuses.map { if (it.id == updated.id) updated else it })
-                editing = null; isNew = false; onSave(current)
+                current = current.copy(statuses = current.statuses.map { if (it.id == updated.id) updated else it })
+                editing = null; onSave(variant, current)
             },
         )
     }
@@ -192,27 +176,20 @@ fun CallRulesScreen(
 @Composable
 private fun StatusEditorDialog(
     initial: CallStatusRule,
-    statuses: List<CallStatusRule>,
     mediaEntries: List<CallMediaEntry>,
     onAddMedia: suspend (CallMediaEntry) -> Unit,
-    stageEditable: Boolean,
     onDismiss: () -> Unit,
     onApply: (CallStatusRule) -> Unit,
 ) {
     var name by remember(initial) { mutableStateOf(initial.name) }
-    var stage by remember(initial) { mutableStateOf(initial.stage) }
     var duration by remember(initial) { mutableStateOf(initial.durationSeconds.toString()) }
-    var timeoutTarget by remember(initial) { mutableStateOf(initial.timeoutTargetId) }
     var mediaEntryId by remember(initial) { mutableStateOf(initial.mediaEntryId) }
     var mediaMenu by remember { mutableStateOf(false) }
     var soundEntryId by remember(initial) { mutableStateOf(initial.soundEntryId) }
     var playSoundOnce by remember(initial) { mutableStateOf(initial.playSoundOnce) }
     var soundMuted by remember(initial) { mutableStateOf(initial.soundMuted) }
-    var callerNameStyle by remember(initial) { mutableStateOf(initial.callerNameStyle.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)) }
-    var callerNumberStyle by remember(initial) { mutableStateOf(initial.callerNumberStyle.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)) }
-    var locationTextStyle by remember(initial) { mutableStateOf(initial.locationTextStyle.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)) }
-    var statusTextStyle by remember(initial) { mutableStateOf(initial.statusTextStyle) }
-    var visualEditorVisible by remember(initial) { mutableStateOf(false) }
+    var repeatAudio by remember(initial) { mutableStateOf(initial.audioPlayCount != 1) }
+    var audioPlayCount by remember(initial) { mutableStateOf(initial.audioPlayCount.toString()) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val soundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -237,25 +214,13 @@ private fun StatusEditorDialog(
             }
         }
     }
-    var buttons by remember(initial) { mutableStateOf(initial.buttons.ifEmpty { defaultButtons(initial.stage) }) }
-    var stageMenu by remember { mutableStateOf(false) }
-    var targetMenu by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("状态规则") },
         text = {
             LazyColumn {
                 item { OutlinedTextField(name, { name = it }, label = { Text("状态名称") }, singleLine = true) }
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("状态类型", modifier = Modifier.weight(1f))
-                        if (stageEditable) Box {
-                            TextButton(onClick = { stageMenu = true }) { Text(stage.title) }
-                            DropdownMenu(stageMenu, { stageMenu = false }) { CallStage.entries.forEach { item -> DropdownMenuItem(text = { Text(item.title) }, onClick = { stage = item; buttons = defaultButtons(item); stageMenu = false }) } }
-                        } else Text(stage.title, color = Color(0xFF707782))
-                    }
-                }
-                item { OutlinedTextField(duration, { duration = it.filter(Char::isDigit).take(5) }, label = { Text("状态/音频时长（秒，0 表示不计时）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true) }
+                item { OutlinedTextField(duration, { duration = it.filter(Char::isDigit).take(5) }, label = { Text("状态时长（秒，0 表示不按时间推进）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true) }
                 item {
                     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -293,292 +258,31 @@ private fun StatusEditorDialog(
                                     }
                                 }
                             }
-                        }
-                    }
-                }
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("到期跳转", modifier = Modifier.weight(1f))
-                        Box {
-                            TextButton(onClick = { targetMenu = true }) { Text(statuses.firstOrNull { it.id == timeoutTarget }?.name ?: "停留") }
-                            DropdownMenu(targetMenu, { targetMenu = false }) {
-                                DropdownMenuItem(text = { Text("停留") }, onClick = { timeoutTarget = null; targetMenu = false })
-                                statuses.filterNot { it.id == initial.id }.forEach { item -> DropdownMenuItem(text = { Text(item.name) }, onClick = { timeoutTarget = item.id; targetMenu = false }) }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = repeatAudio, onCheckedChange = { repeatAudio = it })
+                                Text("音频循环播放")
                             }
+                            if (repeatAudio) OutlinedTextField(
+                                value = audioPlayCount,
+                                onValueChange = { audioPlayCount = it.filter(Char::isDigit).take(2) },
+                                label = { Text("音频播放总次数（0 为无限循环）") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                            )
                         }
                     }
                 }
                 item {
-                    TextButton(onClick = { visualEditorVisible = true }, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
-                        Text("打开通话页可视化编辑")
-                    }
-                    Text("在全屏通话页中点击文字或按钮进行修改", color = Color(0xFF707782), fontSize = 12.sp)
+                    Text(
+                        "状态顺序由程序决定。时长为 0 时不按时间推进；接通和保持状态可由挂断或操作结束。",
+                        color = Color(0xFF707782), fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp),
+                    )
                 }
             }
         },
         confirmButton = { TextButton(onClick = {
-            val normalizedButtons = CallButtonId.entries.map { id -> buttons.firstOrNull { it.id == id } ?: CallButtonRule(id) }
-            onApply(initial.copy(name = name.ifBlank { "未命名状态" }, stage = stage, durationSeconds = duration.toIntOrNull()?.coerceIn(0, 86_400) ?: 0, timeoutTargetId = timeoutTarget, buttons = normalizedButtons, mediaEntryId = mediaEntryId, soundEntryId = soundEntryId, playSoundOnce = playSoundOnce, soundMuted = soundMuted, callerNameStyle = callerNameStyle, callerNumberStyle = callerNumberStyle, locationTextStyle = locationTextStyle, statusTextStyle = statusTextStyle))
+            onApply(initial.copy(name = name.ifBlank { "未命名状态" }, durationSeconds = duration.toIntOrNull()?.coerceIn(0, 86_400) ?: 0, mediaEntryId = mediaEntryId, soundEntryId = soundEntryId, playSoundOnce = playSoundOnce, soundMuted = soundMuted, audioPlayCount = if (repeatAudio) audioPlayCount.toIntOrNull()?.coerceIn(0, 99) ?: 0 else 1))
         }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
-    if (visualEditorVisible) {
-        CallScreenVisualEditor(
-            statusName = name,
-            callerName = "联系人姓名",
-            callerNumber = "138 0013 8000",
-            locationText = "未知归属地",
-            callerNameStyle = callerNameStyle,
-            callerNumberStyle = callerNumberStyle,
-            locationTextStyle = locationTextStyle,
-            statusTextStyle = statusTextStyle,
-            stage = stage,
-            buttons = buttons,
-            statuses = statuses.filterNot { it.id == initial.id },
-            onTextChange = { element, value, style ->
-                when (element) {
-                    CallTextElement.CALLER_NAME -> callerNameStyle = style.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)
-                    CallTextElement.CALLER_NUMBER -> callerNumberStyle = style.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)
-                    CallTextElement.LOCATION -> locationTextStyle = style.copy(offsetXdp = 0, offsetYdp = 0, backgroundColorArgb = null, visible = true)
-                    CallTextElement.STATUS -> { name = value; statusTextStyle = style }
-                }
-            },
-            onButtonChange = { changed -> buttons = buttons.map { if (it.id == changed.id) changed else it } },
-            onDismiss = { visualEditorVisible = false },
-        )
-    }
-}
-
-@Composable
-private fun CallScreenVisualEditor(
-    statusName: String,
-    callerName: String,
-    callerNumber: String,
-    locationText: String,
-    callerNameStyle: CallVisualStyle,
-    callerNumberStyle: CallVisualStyle,
-    locationTextStyle: CallVisualStyle,
-    statusTextStyle: CallVisualStyle,
-    stage: CallStage,
-    buttons: List<CallButtonRule>,
-    statuses: List<CallStatusRule>,
-    onTextChange: (CallTextElement, String, CallVisualStyle) -> Unit,
-    onButtonChange: (CallButtonRule) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var editingText by remember { mutableStateOf<CallTextElement?>(null) }
-    var editingButton by remember { mutableStateOf<CallButtonId?>(null) }
-    val currentRule = buttons.firstOrNull { it.id == editingButton } ?: editingButton?.let { CallButtonRule(it) }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize(), color = Color(0xFF26313D)) {
-            Box(Modifier.fillMaxSize()) {
-                InCallPreviewBackdrop()
-                Column(Modifier.fillMaxSize().padding(WindowInsets.statusBars.asPaddingValues()).padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())) {
-                    Column(Modifier.fillMaxWidth().weight(1f).padding(start = 16.dp, end = 16.dp, top = 92.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                EditableCallText(callerName.ifBlank { "联系人姓名" }, callerNameStyle, 32f, Color.White, true) { editingText = CallTextElement.CALLER_NAME }
-                                EditableCallText(callerNumber.ifBlank { "138 0013 8000" }, callerNumberStyle, 16f, Color.White, false, 4) { editingText = CallTextElement.CALLER_NUMBER }
-                                EditableCallText(locationText.ifBlank { "未知归属地" }, locationTextStyle, 14f, Color(0x99FFFFFF), false, 3) { editingText = CallTextElement.LOCATION }
-                            }
-                            Box(Modifier.padding(start = 16.dp).size(70.dp).clip(CircleShape).background(Color(0xFF535353)), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Filled.Person, contentDescription = "联系人头像", tint = Color.White, modifier = Modifier.size(46.dp))
-                            }
-                        }
-                        Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            EditableCallText(statusName.ifBlank { "未命名状态" }, statusTextStyle, 18f, Color.White, false) { editingText = CallTextElement.STATUS }
-                            Text("  00:18", color = Color.White, fontSize = 18.sp)
-                        }
-                    }
-                    CallScreenButtonCanvas(stage, buttons, onSelect = { editingButton = it })
-                }
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = 12.dp)) { Text("完成", color = Color.White) }
-            }
-        }
-    }
-    editingText?.let { element ->
-        val value = when (element) { CallTextElement.CALLER_NAME -> callerName; CallTextElement.CALLER_NUMBER -> callerNumber; CallTextElement.LOCATION -> locationText; CallTextElement.STATUS -> statusName }
-        val style = when (element) { CallTextElement.CALLER_NAME -> callerNameStyle; CallTextElement.CALLER_NUMBER -> callerNumberStyle; CallTextElement.LOCATION -> locationTextStyle; CallTextElement.STATUS -> statusTextStyle }
-        val label = element.title
-        val defaultColor = if (element == CallTextElement.LOCATION) Color(0x99FFFFFF) else Color.White
-        CallVisualElementDialog(
-            title = label, text = value, style = style, defaultColor = defaultColor,
-            editableText = element == CallTextElement.STATUS,
-            allowPosition = element !in setOf(CallTextElement.CALLER_NAME, CallTextElement.CALLER_NUMBER, CallTextElement.LOCATION),
-            allowBackgroundColor = element !in setOf(CallTextElement.CALLER_NAME, CallTextElement.CALLER_NUMBER, CallTextElement.LOCATION),
-            allowVisibility = element !in setOf(CallTextElement.CALLER_NAME, CallTextElement.CALLER_NUMBER, CallTextElement.LOCATION),
-            defaultFontSizeSp = when (element) { CallTextElement.CALLER_NAME -> 32f; CallTextElement.CALLER_NUMBER -> 16f; CallTextElement.LOCATION -> 14f; CallTextElement.STATUS -> 18f },
-            onDismiss = { editingText = null },
-            onSave = { updatedText, updatedStyle, _, _, _ -> onTextChange(element, updatedText, updatedStyle); editingText = null },
-        )
-    }
-    if (currentRule != null) {
-        CallVisualElementDialog(
-            title = currentRule.label?.takeIf { it.isNotBlank() } ?: buttonDefaultLabel(currentRule.id, stage),
-            text = currentRule.label?.takeIf { it.isNotBlank() } ?: buttonDefaultLabel(currentRule.id, stage), style = currentRule.visualStyle, defaultColor = if (currentRule.enabled) Color.White else Color(0x66FFFFFF),
-            defaultFontSizeSp = 12f,
-            visible = currentRule.visible, enabled = currentRule.enabled, targetStatusId = currentRule.targetStatusId,
-            statuses = statuses, buttonId = currentRule.id,
-            onDismiss = { editingButton = null },
-            onSave = { newLabel, style, isVisible, isEnabled, target -> onButtonChange(currentRule.copy(label = newLabel, visualStyle = style, visible = isVisible, enabled = isEnabled, targetStatusId = target)); editingButton = null },
-        )
-    }
-}
-
-@Composable
-private fun CallScreenButtonCanvas(stage: CallStage, buttons: List<CallButtonRule>, onSelect: (CallButtonId) -> Unit) {
-    val indexedRules = CallButtonId.entries.associateWith { id -> buttons.firstOrNull { it.id == id } ?: CallButtonRule(id) }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        val functionRows = listOf(
-            listOf(CallButtonId.RECORD, CallButtonId.HOLD, CallButtonId.ADD_CALL),
-            listOf(CallButtonId.MUTE, CallButtonId.VIDEO_CALL, CallButtonId.AI_CALL_ASSISTANT),
-        )
-        functionRows.forEachIndexed { index, rowIds ->
-            Row(Modifier.fillMaxWidth().padding(top = if (index == 0) 0.dp else 20.dp)) {
-                rowIds.forEach { id ->
-                    Box(Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
-                        val (painter, size, tint) = when (id) {
-                            CallButtonId.RECORD -> Triple(painterResource(R.drawable.incall_btn_record_call), 36, true)
-                            CallButtonId.HOLD -> Triple(painterResource(R.drawable.incall_btn_hold_call), 36, true)
-                            CallButtonId.ADD_CALL -> Triple(painterResource(R.drawable.incall_btn_add_call), 36, true)
-                            CallButtonId.MUTE -> Triple(painterResource(R.drawable.incall_btn_mute_call), 36, true)
-                            CallButtonId.VIDEO_CALL -> Triple(painterResource(R.drawable.incall_btn_change_to_video), 36, true)
-                            CallButtonId.AI_CALL_ASSISTANT -> Triple(painterResource(R.drawable.incall_btn_call_assistant), 68, false)
-                            else -> Triple(null, 36, true)
-                        }
-                        val rule = indexedRules.getValue(id)
-                        InCallEditorButton(
-                            rule = rule,
-                            defaultLabel = buttonDefaultLabel(id, stage),
-                            iconPainter = painter,
-                            iconSizeDp = size,
-                            tintPainter = tint,
-                        ) { onSelect(id) }
-                    }
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth().padding(top = 30.dp, bottom = 20.dp), verticalAlignment = Alignment.Top) {
-            listOf(CallButtonId.SPEAKER, CallButtonId.HANGUP, CallButtonId.KEYPAD).forEach { id ->
-                Box(Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
-                    val rule = indexedRules.getValue(id)
-                    val icon = when (id) {
-                        CallButtonId.SPEAKER -> painterResource(R.drawable.incall_btn_audiomode_speaker)
-                        CallButtonId.KEYPAD -> painterResource(R.drawable.incall_btn_dialpad)
-                        else -> null
-                    }
-                    if (id == CallButtonId.HANGUP) {
-                        InCallEditorButton(rule, "挂断", Icons.Filled.CallEnd, hangup = true) { onSelect(id) }
-                    } else {
-                        InCallEditorButton(rule, buttonDefaultLabel(id, stage), iconPainter = icon) { onSelect(id) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private enum class CallTextElement(val title: String) { CALLER_NAME("联系人姓名"), CALLER_NUMBER("显示号码"), LOCATION("归属地"), STATUS("状态文字") }
-
-private fun buttonDefaultLabel(id: CallButtonId, stage: CallStage): String {
-    val outgoing = stage == CallStage.DIALING || stage == CallStage.WAITING
-    return when (id) {
-        CallButtonId.MUTE -> "静音"
-        CallButtonId.SPEAKER -> "扬声器"
-        CallButtonId.KEYPAD -> "拨号盘"
-        CallButtonId.RECORD -> "录音"
-        CallButtonId.HOLD -> "保持"
-        CallButtonId.ADD_CALL -> "添加通话"
-        CallButtonId.VIDEO_CALL -> "视频通话"
-        CallButtonId.AI_CALL_ASSISTANT -> "AI 通话助手"
-        CallButtonId.HANGUP -> "挂断"
-    }
-}
-
-@Composable
-private fun EditableCallText(value: String, style: CallVisualStyle, defaultSize: Float, defaultColor: Color, bold: Boolean, top: Int = 0, onClick: () -> Unit) {
-    val hiddenColor = style.textColorArgb?.let { Color(it.toULong()) } ?: defaultColor
-    Text(value, color = if (style.visible) hiddenColor else hiddenColor.copy(alpha = 0.38f), fontSize = style.fontSizeSp?.sp ?: defaultSize.sp,
-        fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
-        modifier = Modifier.padding(top = top.dp).offset(style.offsetXdp.dp, style.offsetYdp.dp).background(style.backgroundColorArgb?.let { Color(it.toULong()) } ?: Color.Transparent, RoundedCornerShape(3.dp)).clickable(onClick = onClick).padding(horizontal = 2.dp, vertical = 1.dp), maxLines = 1)
-}
-
-@Composable
-private fun InCallEditorButton(rule: CallButtonRule, defaultLabel: String, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, hangup: Boolean = false, modifier: Modifier = Modifier, iconPainter: Painter? = null, iconSizeDp: Int = 36, tintPainter: Boolean = true, onClick: () -> Unit) {
-    val style = rule.visualStyle
-    val label = rule.label?.takeIf { it.isNotBlank() } ?: defaultLabel
-    Column(modifier.width(88.dp).offset(style.offsetXdp.dp, style.offsetYdp.dp).clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        InCallButtonSurface(
-            diameter = if (hangup) 70.dp else 66.dp,
-            customColor = style.backgroundColorArgb?.let { Color(it.toULong()) } ?: if (hangup) InCallEndRed else null,
-        ) {
-            val tint = style.textColorArgb?.let { Color(it.toULong()) } ?: if (rule.enabled) Color.White else Color(0x66FFFFFF)
-            if (iconPainter != null) Image(iconPainter, contentDescription = label, modifier = Modifier.size(iconSizeDp.dp), colorFilter = if (tintPainter) ColorFilter.tint(tint) else null)
-            else if (icon != null) Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(36.dp))
-            if (!rule.visible) Text("隐藏", color = Color.White, fontSize = 9.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp))
-        }
-        Text(label, color = style.textColorArgb?.let { Color(it.toULong()) } ?: if (rule.enabled) Color.White else Color(0x66FFFFFF), fontSize = style.fontSizeSp?.sp ?: 12.sp, modifier = Modifier.padding(top = 6.dp), textAlign = TextAlign.Center, maxLines = 1)
-    }
-}
-
-@Composable
-private fun CallVisualElementDialog(
-    title: String,
-    text: String,
-    style: CallVisualStyle,
-    defaultColor: Color,
-    editableText: Boolean = true,
-    allowPosition: Boolean = true,
-    allowBackgroundColor: Boolean = true,
-    allowVisibility: Boolean = true,
-    defaultFontSizeSp: Float = 12f,
-    visible: Boolean = style.visible,
-    enabled: Boolean? = null,
-    targetStatusId: String? = null,
-    statuses: List<CallStatusRule> = emptyList(),
-    buttonId: CallButtonId? = null,
-    onDismiss: () -> Unit,
-    onSave: (String, CallVisualStyle, Boolean, Boolean, String?) -> Unit,
-) {
-    var editedText by remember(title, text) { mutableStateOf(text) }
-    var fontSize by remember(title, style.fontSizeSp, defaultFontSizeSp) { mutableStateOf((style.fontSizeSp ?: defaultFontSizeSp).toString()) }
-    var x by remember(title, style.offsetXdp) { mutableStateOf(style.offsetXdp.toString()) }
-    var y by remember(title, style.offsetYdp) { mutableStateOf(style.offsetYdp.toString()) }
-    var textColor by remember(title, style.textColorArgb, defaultColor) { mutableStateOf(style.textColorArgb?.let { java.lang.Long.toHexString(it).uppercase().takeLast(8) } ?: Integer.toHexString(defaultColor.toArgb()).uppercase().padStart(8, '0')) }
-    var backgroundColor by remember(title, style.backgroundColorArgb) { mutableStateOf(style.backgroundColorArgb?.toString(16)?.uppercase().orEmpty()) }
-    var isVisible by remember(title, visible) { mutableStateOf(visible) }
-    var isEnabled by remember(title, enabled) { mutableStateOf(enabled ?: true) }
-    var target by remember(title, targetStatusId) { mutableStateOf(targetStatusId) }
-    var targetMenu by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("编辑$title") },
-        text = {
-            LazyColumn {
-                if (editableText) item { OutlinedTextField(editedText, { editedText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(if (buttonId == null) "显示文字" else "按钮文字") }, singleLine = true) }
-                if (allowPosition) item { Row { OutlinedTextField(x, { x = it.filter { c -> c == '-' || c.isDigit() }.take(4) }, modifier = Modifier.weight(1f), label = { Text("横向位置 dp") }, singleLine = true); OutlinedTextField(y, { y = it.filter { c -> c == '-' || c.isDigit() }.take(4) }, modifier = Modifier.weight(1f), label = { Text("纵向位置 dp") }, singleLine = true) } }
-                item { OutlinedTextField(fontSize, { fontSize = it.filter { c -> c.isDigit() || c == '.' }.take(5) }, modifier = Modifier.fillMaxWidth(), label = { Text("字体大小 sp（留空默认 ${if (buttonId == null) "" else "12"}）") }, singleLine = true) }
-                item { OutlinedTextField(textColor, { textColor = it.removePrefix("#").filter { c -> c.isDigit() || c.lowercaseChar() in 'a'..'f' }.take(8) }, modifier = Modifier.fillMaxWidth(), label = { Text("文字颜色 ARGB（留空默认）") }, singleLine = true) }
-                if (allowBackgroundColor) item { OutlinedTextField(backgroundColor, { backgroundColor = it.removePrefix("#").filter { c -> c.isDigit() || c.lowercaseChar() in 'a'..'f' }.take(8) }, modifier = Modifier.fillMaxWidth(), label = { Text("背景颜色 ARGB（留空默认）") }, singleLine = true) }
-                if (allowVisibility || buttonId != null) item { Row(verticalAlignment = Alignment.CenterVertically) { if (allowVisibility) { Checkbox(isVisible, { isVisible = it }); Text("显示") }; if (buttonId != null) { Checkbox(isEnabled, { isEnabled = it }); Text("启用") } } }
-                if (buttonId != null) item {
-                    Box {
-                        TextButton(onClick = { targetMenu = true }) { Text("点击后：${statuses.firstOrNull { it.id == target }?.name ?: "执行原动作"}") }
-                        DropdownMenu(targetMenu, { targetMenu = false }) {
-                            DropdownMenuItem(text = { Text("执行原动作") }, onClick = { target = null; targetMenu = false })
-                            statuses.forEach { status -> DropdownMenuItem(text = { Text("跳转到 ${status.name}") }, onClick = { target = status.id; targetMenu = false }) }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = {
-            fun colorValue(raw: String): Long? = raw.trim().removePrefix("#").takeIf { it.isNotBlank() }?.let { value ->
-                value.toLongOrNull(16)?.let { if (value.length <= 6) (it or 0xFF000000L) else it }
-            }
-            val updated = style.copy(offsetXdp = if (allowPosition) x.toIntOrNull()?.coerceIn(-300, 300) ?: 0 else 0, offsetYdp = if (allowPosition) y.toIntOrNull()?.coerceIn(-300, 300) ?: 0 else 0, fontSizeSp = fontSize.toFloatOrNull()?.coerceIn(6f, 96f), textColorArgb = colorValue(textColor), backgroundColorArgb = if (allowBackgroundColor) colorValue(backgroundColor) else null, visible = if (allowVisibility) isVisible else true)
-            onSave(editedText, updated, if (allowVisibility) isVisible else true, isEnabled, target)
-        }) { Text("应用") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
@@ -692,17 +396,18 @@ fun CallNumberPoolsScreen(
         if (entries.isEmpty()) Text("暂无号码", modifier = Modifier.padding(20.dp), color = Color(0xFF707782))
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(entries, key = { it.number }) { entry ->
-                val status = config.statuses.firstOrNull { it.id == extras.statusFor(entry.number) }?.name
+                val variant = extras.screenVariantFor(entry.number)
+                val rules = config.forVariant(variant)
                 val promptType = extras.promptFor(entry.number)
                 val prompt = promptType?.let { type ->
-                    val ruleName = config.statuses.firstOrNull { it.id == extras.promptRuleFor(entry.number) }?.name ?: "规则已删除"
+                    val ruleName = rules.statuses.firstOrNull { it.id == extras.promptRuleFor(entry.number) }?.name ?: "规则已删除"
                     "${type.title.removeSuffix("号码")} → $ruleName"
                 }
                 val auto = extras.autoHangUpSecondsFor(entry.number)
                 Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clickable { editing = entry }) {
                     Column(Modifier.padding(14.dp)) {
                         Text(entry.number, fontWeight = FontWeight.SemiBold)
-                        Text(listOfNotNull(CallAudioMode.fromStored(entry.mode).title, prompt ?: status,
+                        Text(listOfNotNull("${variant.title}界面", CallAudioMode.fromStored(entry.mode).title, prompt,
                             auto?.let { "接通后 ${it} 秒自动挂断" }).joinToString(" · "), color = Color(0xFF707782), fontSize = 13.sp)
                     }
                 }
@@ -723,9 +428,9 @@ fun CallNumberPoolsScreen(
             dismissButton = { TextButton(onClick = { adding = false }) { Text("取消") } })
     }
     editing?.let { entry ->
-        NumberPoolBindingEditor(entry, config, extras, onDismiss = { editing = null }) { mode, statusId, prompt, seconds ->
+        NumberPoolBindingEditor(entry, config, extras, onDismiss = { editing = null }) { variant, mode, prompt, seconds ->
+            extrasStore.setScreenVariant(entry.number, variant)
             onChangeMode(entry.number, mode)
-            extrasStore.bindStatus(entry.number, if (prompt == null) statusId else null)
             if (prompt == null) extrasStore.deletePromptNumber(entry.number)
             else extrasStore.savePromptNumber(entry.number, prompt)
             if (seconds == null) extrasStore.deleteAutoHangUpRule(entry.number) else extrasStore.saveAutoHangUpRule(entry.number, seconds)
@@ -740,32 +445,34 @@ private fun NumberPoolBindingEditor(
     config: CallFlowConfiguration,
     extras: PhoneExtras,
     onDismiss: () -> Unit,
-    onSave: (CallAudioMode, String?, CallPromptType?, Int?) -> Unit,
+    onSave: (CallScreenVariant, CallAudioMode, CallPromptType?, Int?) -> Unit,
 ) {
+    var variant by remember(entry.number) { mutableStateOf(extras.screenVariantFor(entry.number)) }
     var mode by remember(entry.number) { mutableStateOf(CallAudioMode.fromStored(entry.mode)) }
-    var statusId by remember(entry.number) { mutableStateOf(extras.statusFor(entry.number)) }
     var prompt by remember(entry.number) { mutableStateOf(extras.promptFor(entry.number)) }
     var secondsText by remember(entry.number) { mutableStateOf(extras.autoHangUpSecondsFor(entry.number)?.toString().orEmpty()) }
     var modeMenu by remember { mutableStateOf(false) }
-    var statusMenu by remember { mutableStateOf(false) }
+    var variantMenu by remember { mutableStateOf(false) }
     var promptMenu by remember { mutableStateOf(false) }
     val seconds = secondsText.toIntOrNull()
     val validSeconds = secondsText.isBlank() || (seconds != null && seconds in 1..3600)
+    val rules = config.forVariant(variant)
     AlertDialog(onDismissRequest = onDismiss, title = { Text("配置 ${entry.number}") },
         text = { Column {
+            Box { TextButton(onClick = { variantMenu = true }) { Text("通话界面：${variant.title}") }
+                DropdownMenu(variantMenu, { variantMenu = false }) {
+                    CallScreenVariant.entries.forEach { option ->
+                        DropdownMenuItem(text = { Text(option.title) }, onClick = {
+                            variant = option; variantMenu = false
+                        })
+                    }
+                }
+            }
             Box { TextButton(onClick = { modeMenu = true }) { Text("音频模式：${mode.title}") }
                 DropdownMenu(modeMenu, { modeMenu = false }) {
                     CallAudioMode.entries.filter { it.isCallMode }.forEach { option ->
                         DropdownMenuItem(text = { Text(option.title) }, onClick = { mode = option; modeMenu = false })
                     }
-                }
-            }
-            Box { TextButton(onClick = { statusMenu = true }, enabled = prompt == null) {
-                Text("起始状态：${config.statuses.firstOrNull { it.id == statusId }?.name ?: "使用全局规则"}")
-            }
-                DropdownMenu(statusMenu, { statusMenu = false }) {
-                    DropdownMenuItem(text = { Text("使用全局规则") }, onClick = { statusId = null; statusMenu = false })
-                    config.statuses.forEach { status -> DropdownMenuItem(text = { Text(status.name) }, onClick = { statusId = status.id; statusMenu = false }) }
                 }
             }
             Box { TextButton(onClick = { promptMenu = true }) { Text("提示类型：${prompt?.title ?: "无"}") }
@@ -777,8 +484,8 @@ private fun NumberPoolBindingEditor(
                 }
             }
             if (prompt != null) {
-                val categoryRuleId = extras.promptRuleFor(requireNotNull(prompt))
-                val categoryRuleName = config.statuses.firstOrNull { it.id == categoryRuleId && it.stage == CallStage.OUTCOME }?.name ?: "未设置有效规则"
+                val categoryRuleId = extras.promptRuleFor(requireNotNull(prompt), variant)
+                val categoryRuleName = rules.statuses.firstOrNull { it.id == categoryRuleId && it.stage == CallStage.OUTCOME }?.name ?: "未设置有效规则"
                 Text("${requireNotNull(prompt).title}统一使用：$categoryRuleName", color = Color.Gray, fontSize = 12.sp)
             }
             OutlinedTextField(secondsText, { secondsText = it.filter(Char::isDigit).take(4) },
@@ -786,7 +493,7 @@ private fun NumberPoolBindingEditor(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
             if (!validSeconds) Text("请输入 1–3600 秒", color = Color.Red)
         } },
-        confirmButton = { TextButton(onClick = { onSave(mode, statusId, prompt, seconds) },
+        confirmButton = { TextButton(onClick = { onSave(variant, mode, prompt, seconds) },
             enabled = validSeconds) { Text("保存绑定") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
 }

@@ -4,7 +4,8 @@ import android.content.Context
 import android.os.Build
 import android.telephony.TelephonyManager
 
-internal fun homeSimLabels(context: Context): List<String> = runCatching {
+internal fun homeSimLabels(context: Context, dualSimDisplayEnabled: Boolean): List<String> = runCatching {
+    if (!dualSimDisplayEnabled) return emptyList()
     val manager = context.getSystemService(TelephonyManager::class.java) ?: return emptyList()
     val count = if (Build.VERSION.SDK_INT >= 30) manager.activeModemCount else manager.phoneCount
     val slots = (0 until count).filter { manager.getSimState(it) !in listOf(TelephonyManager.SIM_STATE_ABSENT, TelephonyManager.SIM_STATE_UNKNOWN) }

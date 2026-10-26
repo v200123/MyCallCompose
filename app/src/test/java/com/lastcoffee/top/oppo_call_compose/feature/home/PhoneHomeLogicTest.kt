@@ -14,7 +14,7 @@ class PhoneHomeLogicTest {
         CallRecord(number, "", "2026/10/22", kind, timeMillis = time)
 
     @Test fun onlyConsecutiveEqualNumbersAreGrouped() {
-        val groups = groupHomeCalls(listOf(call("136 5817 0135", 5), call("13658170135", 4), call("13900000000", 3), call("13658170135", 2)))
+        val groups = groupHomeCalls(listOf(call("139 0000 0001", 5), call("13900000001", 4), call("13900000002", 3), call("13900000001", 2)))
         assertEquals(listOf(2, 1, 1), groups.map { it.calls.size })
     }
     @Test fun missedFilterExcludesRejectedAndUnconnectedOutgoingCalls() {
@@ -25,8 +25,8 @@ class PhoneHomeLogicTest {
         assertTrue(groupHomeCalls(listOf(call("1", 2), call("1", 1, CallKind.MISSED)), true).isEmpty())
     }
     @Test fun dialMatchingFindsMiddleDigitsAndIgnoresNumberSpaces() {
-        val contact = ContactMatch("川哥", "191 3606 6659", "四川成都")
-        assertEquals(listOf(contact), matchingDialContacts(listOf(contact), "136"))
+        val contact = ContactMatch("测试联系人", "139 0000 0001", "测试地区")
+        assertEquals(listOf(contact), matchingDialContacts(listOf(contact), "000"))
         assertTrue(matchingDialContacts(listOf(contact), "").isEmpty())
     }
     @Test fun relativeDateShowsTodayTimeYesterdayAndOlderDate() {
@@ -39,6 +39,11 @@ class PhoneHomeLogicTest {
     @Test fun attributionFallsBackToSavedCarrierAndCustomLocationWins() {
         val record = call("1", 1).copy(attribution = "四川德阳", operator = "移动")
         assertEquals("四川德阳 移动", record.homeAttribution(null))
+        assertEquals("四川德阳 移动", record.copy(attribution = "四川 德阳").homeAttribution(null))
         assertEquals("北京 联通", record.homeAttribution("北京 联通"))
+    }
+    @Test fun callTypeIsNotUsedAsAttribution() {
+        val record = call("1368170135", 1, CallKind.OUTGOING).copy(description = "呼出  0秒")
+        assertEquals("未知归属地", record.homeAttribution(null))
     }
 }

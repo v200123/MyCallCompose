@@ -91,7 +91,7 @@ internal fun OppoDialNumberHeader(number: String, location: String?, showDivider
 internal fun OppoDialPad(
     number: String,
     onNumberChange: (String) -> Unit,
-    onDial: () -> Unit,
+    onDial: (Int) -> Unit,
     onDismiss: () -> Unit,
     simLabels: List<String> = emptyList(),
     dialpadToneEnabled: Boolean = false,
@@ -153,7 +153,7 @@ internal fun OppoDialPad(
                 } else {
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                         Box(
-                            Modifier.size(56.dp).clip(CircleShape).background(Color(0xFF00BD13)).clickable(onClick = onDial),
+                            Modifier.size(56.dp).clip(CircleShape).background(Color(0xFF00BD13)).clickable { onDial(1) },
                             contentAlignment = Alignment.Center,
                         ) {
                             Image(painterResource(R.drawable.oppo_pb_ic_dial_call), "拨打", Modifier.size(36.dp))
@@ -228,11 +228,11 @@ private fun OppoDialKeyContent(key: DialKey) {
 }
 
 @Composable
-private fun OppoSimDialButton(index: Int, label: String, onDial: () -> Unit) {
+private fun OppoSimDialButton(index: Int, label: String, onDial: (Int) -> Unit) {
     val textSize = with(LocalDensity.current) { 12.dp.toSp() }
     Row(
         Modifier.size(106.dp, 40.dp).clip(RoundedCornerShape(20.dp))
-            .background(Color(0xFF00BD13)).clickable(onClick = onDial).padding(horizontal = 10.dp),
+            .background(Color(0xFF00BD13)).clickable { onDial(index + 1) }.padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {

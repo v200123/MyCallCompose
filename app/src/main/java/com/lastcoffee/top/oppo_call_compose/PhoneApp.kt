@@ -50,6 +50,7 @@ import com.lastcoffee.top.oppo_call_compose.feature.settings.CallPromptNumbersSc
 import com.lastcoffee.top.oppo_call_compose.data.CallPromptType
 import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
+import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
 import com.lastcoffee.top.oppo_call_compose.model.CallKind
 import com.lastcoffee.top.oppo_call_compose.model.CallRecord
 import com.lastcoffee.top.oppo_call_compose.model.ContactMatch
@@ -73,7 +74,7 @@ private data object NumberPoolsRoute
 private data class CallMediaRoute(val mode: CallAudioMode)
 private data class CallDetailRoute(val record: CallRecord)
 private data class ContactDetailRoute(val contact: ContactMatch)
-private data class InCallRoute(val number: String, val mode: CallAudioMode, val initialStatusId: String, val configuration: CallFlowConfiguration)
+private data class InCallRoute(val number: String, val mode: CallAudioMode, val initialStatusId: String, val configuration: CallFlowConfiguration, val simSlot: Int, val screenVariant: CallScreenVariant)
 
 @Composable
 fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {}) {
@@ -98,10 +99,10 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
     val backStack = remember { mutableStateListOf<Any>(HomeRoute) }
     LaunchedEffect(manualCallStore) { manualCallStore.importLegacyRecords(); manualCallStore.configuration() }
     LaunchedEffect(extras, manualCallStore) { manualCallStore.ensureConfiguredNumbers(extras.configuredNumbers()) }
-    val startSimulatedCall: (String) -> Unit = { number ->
+    val startSimulatedCall: (String, Int) -> Unit = { number, simSlot ->
         scope.launch {
-            val setup = manualCallStore.prepareCall(number, extras.statusFor(number), extras.promptFor(number) != null)
-            backStack.add(InCallRoute(number, setup.mode, setup.initialStatusId, setup.configuration))
+            val setup = manualCallStore.prepareCall(number, extras.screenVariantFor(number))
+            backStack.add(InCallRoute(number, setup.mode, setup.initialStatusId, setup.configuration, simSlot, setup.screenVariant))
         }
     }
     val records = manualCalls.map { it.toCallRecord() }
@@ -135,6 +136,12 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
             mediaEntries = mediaEntries,
             extras = extras,
             resolvedLocation = locationFor(activeCall.number),
+            simSlot = activeCall.simSlot,
+            screenVariant = activeCall.screenVariant,
+            resolvedContact = contacts.firstOrNull { contact ->
+                com.lastcoffee.top.oppo_call_compose.data.normalizePhoneNumber(contact.number) ==
+                    com.lastcoffee.top.oppo_call_compose.data.normalizePhoneNumber(activeCall.number)
+            },
             badgeRule = badgeSettings.ruleFor(activeCall.number),
             onRingbackStarted = { badgeStore.assignRuleForPhone(it) },
             onCallFinished = { call ->
@@ -170,6 +177,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                         onDial = onDial,
                         contacts = contacts,
                         dialpadToneEnabled = extras.dialpadToneEnabled,
+                        dualSimDisplayEnabled = extras.dualSimDisplayEnabled,
                         onSaveContact = contactsStore::save,
                         onDeleteRecords = { selected ->
                             try { manualCallStore.deleteRecords(selected); true } catch (_: Exception) { false }
@@ -250,7 +258,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                     )
                 }
                 entry<CallRulesRoute> {
-                    CallRulesScreen(callConfiguration, extras, mediaEntries = mediaEntries, onAddMedia = { entry -> manualCallStore.addMedia(entry) }, onBack = { backStack.removeLastOrNull() }, onSave = { updated -> scope.launch { manualCallStore.saveConfiguration(updated) } })
+                    CallRulesScreen(callConfiguration, extras, mediaEntries = mediaEntries, onAddMedia = { entry -> manualCallStore.addMedia(entry) }, onBack = { backStack.removeLastOrNull() }, onSave = { variant, updated -> scope.launch { manualCallStore.saveVariantConfiguration(variant, updated) } })
                 }
                 entry<CallMediaRoute> { route ->
                     CallMediaLibraryScreen(
@@ -274,7 +282,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                 entry<AddCallRecordRoute> {
                     AddCallRecordScreen(
                         onBack = { backStack.removeLastOrNull() },
-                        onSave = { newCall ->
+                        onSave = { newCall, hasAvatar, avatarPath ->
                             try {
                                 if (newCall.attribution == null && newCall.operator == null) {
                                     attributionStore.request(newCall.number, extrasStore.settings.value)
@@ -289,6 +297,9 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                                     operator = newCall.operator ?: savedPlace?.carrier?.ifBlank { null } ?: lookupParts.lastOrNull()?.takeIf { lookupParts.size >= 2 },
                                 )
                                 manualCallStore.add(resolvedCall)
+                                val previousAvatarPath = extrasStore.settings.value.avatarPhotoFor(newCall.number)
+                                extrasStore.setCallRecordAvatar(newCall.number, hasAvatar, avatarPath)
+                                if (previousAvatarPath != avatarPath) CallMediaFiles.delete(context, previousAvatarPath)
                                 backStack.removeLastOrNull()
                                 true
                             } catch (_: Exception) {
@@ -301,9 +312,10 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                     CallDetailScreen(
                         record = route.record,
                         allRecords = records,
+                        contacts = contacts,
                         customLocation = locationFor(route.record.number) ?: locationFor(route.record.description),
                         onBack = { backStack.removeLastOrNull() },
-                        onDial = startSimulatedCall,
+                        onDial = { number -> startSimulatedCall(number, 1) },
                         onEditNumber = { number ->
                             while (backStack.size > 1) backStack.removeLastOrNull()
                             pendingDialNumber = number
@@ -323,9 +335,10 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                     CallDetailScreen(
                         record = CallRecord(route.contact.number, route.contact.location, "", CallKind.OUTGOING),
                         allRecords = records,
+                        contacts = contacts,
                         customLocation = locationFor(route.contact.number),
                         onBack = { backStack.removeLastOrNull() },
-                        onDial = startSimulatedCall,
+                        onDial = { number -> startSimulatedCall(number, 1) },
                         fromContact = true,
                     )
                 }

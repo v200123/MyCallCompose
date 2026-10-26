@@ -23,6 +23,15 @@ enum class CallStage(val title: String) {
     DISCONNECTING("正在挂断"), DISCONNECTED("已挂断")
 }
 
+enum class CallScreenVariant(val title: String) {
+    WITHOUT_AVATAR("无头像"), WITH_AVATAR("有头像");
+
+    companion object {
+        fun forNumber(number: String): CallScreenVariant =
+            if (number.filter(Char::isDigit) == "10086") WITH_AVATAR else WITHOUT_AVATAR
+    }
+}
+
 enum class CallButtonId(val title: String) {
     MUTE("静音"), SPEAKER("扬声器"), KEYPAD("拨号盘"), RECORD("录音"), HOLD("保持"),
     ADD_CALL("添加通话"), VIDEO_CALL("视频通话"), AI_CALL_ASSISTANT("AI 通话助手"), HANGUP("挂断")
@@ -61,6 +70,8 @@ data class CallStatusRule(
     val soundEntryId: String? = null,
     val playSoundOnce: Boolean = false,
     val soundMuted: Boolean = false,
+    /** Total audio plays. 0 keeps the previous unlimited-loop behavior. */
+    val audioPlayCount: Int = 0,
     val callerNameStyle: CallVisualStyle = CallVisualStyle(),
     val callerNumberStyle: CallVisualStyle = CallVisualStyle(),
     val locationTextStyle: CallVisualStyle = CallVisualStyle(),
@@ -71,7 +82,80 @@ data class CallFlowConfiguration(
     val initialStatusId: String = "dialing",
     val selectedAudioMode: CallAudioMode = CallAudioMode.DEFAULT_TONE,
     val statuses: List<CallStatusRule> = defaultCallStatuses(),
+    val avatarInitialStatusId: String = "dialing",
+    val avatarStatuses: List<CallStatusRule> = defaultCallStatuses(),
 )
+
+fun CallFlowConfiguration.forVariant(variant: CallScreenVariant): CallFlowConfiguration = when (variant) {
+    CallScreenVariant.WITHOUT_AVATAR -> copy(avatarStatuses = emptyList())
+    CallScreenVariant.WITH_AVATAR -> copy(
+        initialStatusId = avatarInitialStatusId,
+        statuses = avatarStatuses,
+        avatarStatuses = emptyList(),
+    )
+}
+
+fun CallFlowConfiguration.withVariantRules(variant: CallScreenVariant, edited: CallFlowConfiguration): CallFlowConfiguration =
+    when (variant) {
+        CallScreenVariant.WITHOUT_AVATAR -> copy(initialStatusId = edited.initialStatusId, statuses = edited.statuses)
+        CallScreenVariant.WITH_AVATAR -> copy(avatarInitialStatusId = edited.initialStatusId, avatarStatuses = edited.statuses)
+    }
+
+val coreCallStatusIds = setOf("dialing", "waiting", "active")
+
+/** Restore missing core statuses without discarding edits to existing ones. */
+fun CallFlowConfiguration.withRequiredCallStatuses(previous: CallFlowConfiguration = CallFlowConfiguration()): CallFlowConfiguration {
+    return copy(
+        statuses = keepRequiredStatuses(statuses, previous.statuses),
+        avatarStatuses = keepRequiredStatuses(avatarStatuses, previous.avatarStatuses),
+    )
+}
+
+/** The application owns entry, stage order, and button transitions. */
+fun CallFlowConfiguration.withProgrammedCallFlow(): CallFlowConfiguration {
+    val defaultStages = defaultCallStatuses().associate { it.id to it.stage }
+    fun fixed(statuses: List<CallStatusRule>): List<CallStatusRule> = statuses.map { status ->
+        val stage = defaultStages[status.id] ?: status.stage
+        val nextId = when (stage) {
+            CallStage.DIALING -> "waiting"
+            CallStage.WAITING -> "active"
+            CallStage.OUTCOME -> "disconnecting"
+            CallStage.ACTIVE -> "disconnecting"
+            CallStage.HOLD -> "active"
+            CallStage.DISCONNECTING -> "disconnected"
+            CallStage.DISCONNECTED -> null
+        }
+        status.copy(
+            stage = stage,
+            timeoutTargetId = nextId,
+            buttons = status.buttons.map { it.copy(targetStatusId = null) },
+        )
+    }
+    return copy(
+        initialStatusId = "dialing",
+        avatarInitialStatusId = "dialing",
+        statuses = fixed(statuses),
+        avatarStatuses = fixed(avatarStatuses),
+    )
+}
+
+private fun keepRequiredStatuses(statuses: List<CallStatusRule>, previous: List<CallStatusRule>): List<CallStatusRule> {
+    val proposedById = statuses.associateBy(CallStatusRule::id)
+    val previousById = previous.associateBy(CallStatusRule::id)
+    val defaults = defaultCallStatuses()
+    val defaultsById = defaults.associateBy(CallStatusRule::id)
+    val required = defaults.map { fallback ->
+        (proposedById[fallback.id] ?: previousById[fallback.id] ?: fallback).withVisibleCallButtons()
+    }
+    val other = statuses.filterNot { it.id in defaultsById }.distinctBy(CallStatusRule::id).map(CallStatusRule::withVisibleCallButtons)
+    return required + other
+}
+
+fun CallStatusRule.withVisibleCallButtons(): CallStatusRule {
+    val configured = buttons.associateBy(CallButtonRule::id)
+    val defaults = defaultButtons(stage).associateBy(CallButtonRule::id)
+    return copy(buttons = CallButtonId.entries.map { id -> (configured[id] ?: defaults.getValue(id)).copy(visible = true) })
+}
 
 data class CallMediaEntry(
     val id: String,
@@ -86,19 +170,20 @@ data class CallSessionSetup(
     val mode: CallAudioMode,
     val initialStatusId: String,
     val configuration: CallFlowConfiguration,
+    val screenVariant: CallScreenVariant,
 )
 
 fun defaultButtons(stage: CallStage): List<CallButtonRule> {
-    val outgoing = stage == CallStage.DIALING || stage == CallStage.WAITING
     val active = stage == CallStage.ACTIVE || stage == CallStage.HOLD
     return CallButtonId.entries.map { id ->
         CallButtonRule(id = id, visible = true, enabled = when (id) {
-            CallButtonId.MUTE, CallButtonId.KEYPAD -> active
+            CallButtonId.MUTE -> active
+            CallButtonId.KEYPAD -> stage !in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)
             CallButtonId.SPEAKER -> stage !in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)
-            CallButtonId.RECORD -> stage == CallStage.ACTIVE
-            CallButtonId.ADD_CALL, CallButtonId.AI_CALL_ASSISTANT -> active
-            CallButtonId.HOLD -> active || outgoing
-            CallButtonId.VIDEO_CALL -> active || outgoing
+            CallButtonId.RECORD -> stage !in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)
+            CallButtonId.ADD_CALL -> active
+            CallButtonId.AI_CALL_ASSISTANT -> stage !in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)
+            CallButtonId.HOLD, CallButtonId.VIDEO_CALL -> active
             CallButtonId.HANGUP -> stage !in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)
         })
     }
@@ -106,7 +191,7 @@ fun defaultButtons(stage: CallStage): List<CallButtonRule> {
 
 fun defaultCallStatuses(): List<CallStatusRule> = listOf(
     CallStatusRule("dialing", "正在呼叫", CallStage.DIALING, 1, "waiting"),
-    CallStatusRule("waiting", "等待接听", CallStage.WAITING, 30, "no_answer"),
+    CallStatusRule("waiting", "等待接听", CallStage.WAITING, 30, "active"),
     CallStatusRule("no_answer", "无人接听", CallStage.OUTCOME, 20, "disconnecting", outcome = "NO_ANSWER"),
     CallStatusRule("busy", "对方忙线", CallStage.OUTCOME, 5, "disconnecting", outcome = "BUSY"),
     CallStatusRule("empty_number", "空号", CallStage.OUTCOME, 10, "disconnecting", outcome = "EMPTY_NUMBER"),

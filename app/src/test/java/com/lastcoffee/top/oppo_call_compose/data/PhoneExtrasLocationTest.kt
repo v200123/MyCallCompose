@@ -6,6 +6,13 @@ import org.junit.Test
 
 class PhoneExtrasLocationTest {
     @Test
+    fun homeLocationJoinsProvinceAndCityBeforeCarrier() {
+        assertEquals("四川德阳 移动", CustomPhoneLocation("1365817", "四川", "德阳", "移动").displayText)
+        assertEquals("北京 移动", formatPhoneLocation("北京", "北京", "移动"))
+        assertEquals("四川德阳 移动", normalizeCachedPhoneLocation("四川 德阳 移动"))
+    }
+
+    @Test
     fun fullNumberOverridesSevenDigitMobilePrefix() {
         val extras = PhoneExtras(locations = mapOf(
             "1380013" to CustomPhoneLocation("1380013", "北京", "北京", ""),

@@ -4,9 +4,15 @@ import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -16,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -23,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,7 +48,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -51,6 +63,8 @@ import androidx.compose.ui.unit.sp
 import com.lastcoffee.top.oppo_call_compose.data.normalizePhoneNumber
 import com.lastcoffee.top.oppo_call_compose.model.CallKind
 import com.lastcoffee.top.oppo_call_compose.model.ManualCall
+import com.lastcoffee.top.oppo_call_compose.feature.call.decodeAvatarFile
+import com.lastcoffee.top.oppo_call_compose.feature.call.decodeAvatarUri
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.Instant
@@ -65,12 +79,21 @@ private val callZone = ZoneId.of("Asia/Shanghai")
 @Composable
 fun AddCallRecordScreen(
     onBack: () -> Unit,
-    onSave: suspend (ManualCall) -> Boolean,
+    onSave: suspend (ManualCall, Boolean, String?) -> Boolean,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var number by rememberSaveable { mutableStateOf("") }
     var outgoing by rememberSaveable { mutableStateOf(true) }
+    var hasAvatar by rememberSaveable { mutableStateOf(false) }
+    var avatarUri by remember { mutableStateOf<Uri?>(null) }
+    val avatarPreview = remember(avatarUri) { decodeAvatarUri(context, avatarUri) }
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            if (decodeAvatarUri(context, uri) == null) Toast.makeText(context, "无法读取这张图片，请重新选择", Toast.LENGTH_SHORT).show()
+            else avatarUri = uri
+        }
+    }
     var durationText by rememberSaveable { mutableStateOf("") }
     var callTimeMillis by rememberSaveable {
         mutableStateOf(LocalDateTime.now(callZone).withSecond(0).withNano(0).atZone(callZone).toInstant().toEpochMilli())
@@ -139,6 +162,31 @@ fun AddCallRecordScreen(
                     }
                 }
 
+                FieldTitle("是否有头像")
+                Column {
+                    Row(modifier = Modifier.fillMaxWidth().clickable { hasAvatar = false }, verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = !hasAvatar, onClick = { hasAvatar = false })
+                        Text("无头像")
+                    }
+                    Row(modifier = Modifier.fillMaxWidth().clickable { hasAvatar = true }, verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = hasAvatar, onClick = { hasAvatar = true })
+                        Text("有头像")
+                    }
+                }
+                if (hasAvatar) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(modifier = Modifier.size(64.dp).clip(CircleShape).background(Color(0xFFE4E7E5)), contentAlignment = Alignment.Center) {
+                            if (avatarPreview != null) Image(avatarPreview.asImageBitmap(), contentDescription = "已选择的头像", modifier = Modifier.size(64.dp), contentScale = ContentScale.Crop)
+                            else Icon(Icons.Filled.Person, contentDescription = "默认头像", tint = Color(0xFF666D69), modifier = Modifier.size(40.dp))
+                        }
+                        OutlinedButton(onClick = { avatarPicker.launch(arrayOf("image/*")) }) {
+                            Text(if (avatarUri == null) "上传头像" else "更换头像")
+                        }
+                        if (avatarUri != null) OutlinedButton(onClick = { avatarUri = null }) { Text("使用默认") }
+                    }
+                    Text("不上传时使用默认头像", fontSize = 13.sp, color = Color.Gray)
+                }
+
                 FieldTitle("通话日期")
                 Button(onClick = ::pickCallTime, modifier = Modifier.fillMaxWidth()) { Text(callTime.format(callTimeFormat)) }
 
@@ -177,7 +225,14 @@ fun AddCallRecordScreen(
                         )
                         isSaving = true
                         scope.launch {
-                            if (!onSave(call)) errorMessage = "保存失败，请重试"
+                            val imported = if (hasAvatar && avatarUri != null) CallMediaFiles.importDocument(context, avatarUri!!, "avatars") else null
+                            if (hasAvatar && avatarUri != null && (imported == null || !imported.mimeType.startsWith("image/") || decodeAvatarFile(imported.path) == null)) {
+                                CallMediaFiles.delete(context, imported?.path)
+                                errorMessage = "头像上传失败，请重新选择"
+                            } else if (!onSave(call, hasAvatar, imported?.path)) {
+                                CallMediaFiles.delete(context, imported?.path)
+                                errorMessage = "保存失败，请重试"
+                            }
                             isSaving = false
                         }
                     }

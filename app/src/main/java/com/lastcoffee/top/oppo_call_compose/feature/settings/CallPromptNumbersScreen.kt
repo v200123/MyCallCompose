@@ -36,7 +36,9 @@ import com.lastcoffee.top.oppo_call_compose.data.PhoneExtras
 import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
 import com.lastcoffee.top.oppo_call_compose.data.normalizePhoneNumber
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
+import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
+import com.lastcoffee.top.oppo_call_compose.model.forVariant
 
 @Composable
 fun CallPromptNumbersScreen(
@@ -49,15 +51,22 @@ fun CallPromptNumbersScreen(
     var adding by remember(type) { mutableStateOf(false) }
     var deleting by remember(type) { mutableStateOf<String?>(null) }
     var clearing by remember(type) { mutableStateOf(false) }
+    var variant by remember(type) { mutableStateOf(CallScreenVariant.WITHOUT_AVATAR) }
     val numbers = settings.promptNumbers.filterValues { it == type }.keys.sorted()
-    val outcomeRules = configuration.statuses.filter { it.stage == CallStage.OUTCOME }
-    val selectedRuleId = settings.promptRuleFor(type)
+    val outcomeRules = configuration.forVariant(variant).statuses.filter { it.stage == CallStage.OUTCOME }
+    val selectedRuleId = settings.promptRuleFor(type, variant)
     val selectedRule = outcomeRules.firstOrNull { it.id == selectedRuleId }
 
     ExtrasFrame(type.title, onBack) {
-        Text("此类全部号码统一执行所选规则；更换规则后立即应用到已有号码。", color = Color.Gray, modifier = Modifier.padding(16.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+            CallScreenVariant.entries.forEach { option ->
+                if (variant == option) Button(onClick = {}, modifier = Modifier.weight(1f)) { Text(option.title) }
+                else TextButton(onClick = { variant = option }, modifier = Modifier.weight(1f)) { Text(option.title) }
+            }
+        }
+        Text("分别为两种界面选择提示规则；号码按其界面类型使用对应规则。", color = Color.Gray, modifier = Modifier.padding(16.dp))
         BindingDropdown("提示规则", selectedRule?.name.orEmpty(), outcomeRules.map { it.id to it.name },
-            onSelect = { store.bindPromptCategoryRule(type, it) },
+            onSelect = { store.bindPromptCategoryRule(type, it, variant) },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
         if (selectedRule == null) Text("请先选择有效的提示规则", color = Color.Red, modifier = Modifier.padding(horizontal = 16.dp))
         Button(onClick = { adding = true }, enabled = selectedRule != null,

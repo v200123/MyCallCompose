@@ -31,7 +31,7 @@ class LocalContactsStore(context: Context) {
     }
 
     private fun load(): List<ContactMatch> {
-        val json = preferences.getString("contacts", null) ?: return demoContacts
+        val json = preferences.getString("contacts", null) ?: return emptyList()
         return runCatching {
             val array = JSONArray(json)
             buildList {
@@ -44,7 +44,7 @@ class LocalContactsStore(context: Context) {
                     }
                 }
             }
-        }.getOrElse { demoContacts }
+        }.getOrElse { emptyList() }
     }
 
     private fun normalizedNumber(number: String): String = number.filter { it.isDigit() || it == '+' }

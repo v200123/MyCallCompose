@@ -124,6 +124,7 @@ fun SettingsScreen(
                 }
             }
             Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            SimDisplaySettings(extras)
             DialpadToneSettings(extras)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp)

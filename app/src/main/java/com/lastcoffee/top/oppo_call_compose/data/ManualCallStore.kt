@@ -20,10 +20,16 @@ import com.lastcoffee.top.oppo_call_compose.model.CallButtonRule
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
 import com.lastcoffee.top.oppo_call_compose.model.CallMediaEntry
 import com.lastcoffee.top.oppo_call_compose.model.CallSessionSetup
+import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
 import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
 import com.lastcoffee.top.oppo_call_compose.model.CallVisualStyle
 import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
+import com.lastcoffee.top.oppo_call_compose.model.withRequiredCallStatuses
+import com.lastcoffee.top.oppo_call_compose.model.withProgrammedCallFlow
+import com.lastcoffee.top.oppo_call_compose.model.forVariant
+import com.lastcoffee.top.oppo_call_compose.model.withVariantRules
+import com.lastcoffee.top.oppo_call_compose.model.withVisibleCallButtons
 import com.lastcoffee.top.oppo_call_compose.model.CallRecord
 import com.lastcoffee.top.oppo_call_compose.model.ManualCall
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +57,8 @@ class ManualCallStore internal constructor(context: Context, private val databas
 
     suspend fun exportTransferState(): CallTransferState = database.withTransaction {
         CallTransferState(
-            dao.getCallConfiguration()?.content ?: encodeConfiguration(CallFlowConfiguration()),
+            dao.getCallConfiguration()?.content?.let { encodeConfiguration(decodeConfiguration(it)) }
+                ?: encodeConfiguration(CallFlowConfiguration().withProgrammedCallFlow()),
             dao.getAllMediaEntries().map { it.toCallMediaEntry() },
         )
     }
@@ -62,11 +69,13 @@ class ManualCallStore internal constructor(context: Context, private val databas
         val mediaIds = state.mediaEntries.map { it.id }.toSet()
         require(mediaIds.size == state.mediaEntries.size) { "媒体编号重复" }
         require(state.mediaEntries.all { it.id.isNotBlank() && it.title.isNotBlank() && it.mode.acceptsMimeType(it.mimeType) }) { "媒体信息无效" }
-        val configuration = decodeConfiguration(state.configurationJson).let { config ->
-            config.copy(statuses = config.statuses.map { status -> status.copy(
+        val previous = dao.getCallConfiguration()?.content?.let(::decodeConfiguration) ?: CallFlowConfiguration()
+        val configuration = decodeConfiguration(state.configurationJson).withRequiredCallStatuses(previous).withProgrammedCallFlow().let { config ->
+            fun keepMedia(statuses: List<CallStatusRule>) = statuses.map { status -> status.copy(
                 mediaEntryId = status.mediaEntryId?.takeIf { it in mediaIds },
                 soundEntryId = status.soundEntryId?.takeIf { it in mediaIds },
-            ) })
+            ) }
+            config.copy(statuses = keepMedia(config.statuses), avatarStatuses = keepMedia(config.avatarStatuses))
         }
         database.withTransaction {
             dao.deleteAllMediaEntries()
@@ -79,9 +88,14 @@ class ManualCallStore internal constructor(context: Context, private val databas
         val saved = dao.getCallConfiguration()
         if (saved != null) {
             val config = decodeConfiguration(saved.content)
-            val missingUnreachable = config.statuses.none { it.id == "unreachable" }
+            val missingUnreachable = config.statuses.none { it.id == "unreachable" } ||
+                config.avatarStatuses.none { it.id == "unreachable" }
             if (missingUnreachable) {
-                config.copy(statuses = config.statuses + defaultCallStatuses().first { it.id == "unreachable" })
+                val unreachable = defaultCallStatuses().first { it.id == "unreachable" }
+                config.copy(
+                    statuses = config.statuses.let { if (it.any { rule -> rule.id == "unreachable" }) it else it + unreachable },
+                    avatarStatuses = config.avatarStatuses.let { if (it.any { rule -> rule.id == "unreachable" }) it else it + unreachable },
+                )
                     .also { dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(it))) }
             } else config
         } else {
@@ -92,31 +106,24 @@ class ManualCallStore internal constructor(context: Context, private val databas
     }
 
     suspend fun saveConfiguration(configuration: CallFlowConfiguration) = configurationMutex.withLock {
-        val validIds = configuration.statuses.map { it.id }.toSet()
-        val normalized = configuration.copy(
-            initialStatusId = configuration.initialStatusId.takeIf { it in validIds } ?: configuration.statuses.firstOrNull()?.id ?: "dialing",
-            statuses = configuration.statuses.map { status ->
-                status.copy(
-                    durationSeconds = status.durationSeconds.coerceIn(0, 86_400),
-                    timeoutTargetId = status.timeoutTargetId?.takeIf { it in validIds },
-                    buttons = status.buttons.map { button -> button.copy(targetStatusId = button.targetStatusId?.takeIf { it in validIds }) },
-                )
-            },
-        )
-        dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(normalized)))
+        val previous = dao.getCallConfiguration()?.content?.let(::decodeConfiguration) ?: CallFlowConfiguration()
+        dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(normalizeConfiguration(configuration, previous))))
     }
 
-    suspend fun prepareCall(number: String, preferredStatusId: String? = null, forceDialing: Boolean = false): CallSessionSetup {
-        val config = configuration()
+    suspend fun saveVariantConfiguration(variant: CallScreenVariant, edited: CallFlowConfiguration) = configurationMutex.withLock {
+        val previous = dao.getCallConfiguration()?.content?.let(::decodeConfiguration) ?: CallFlowConfiguration()
+        val merged = previous.withVariantRules(variant, edited)
+        dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(normalizeConfiguration(merged, previous))))
+    }
+
+    suspend fun prepareCall(number: String, variant: CallScreenVariant = CallScreenVariant.forNumber(number)): CallSessionSetup {
+        val config = configuration().withProgrammedCallFlow().forVariant(variant)
         val normalizedNumber = number.filter { it.isDigit() || it == '+' }
         val existing = dao.getNumberPool(normalizedNumber)
         val mode = existing?.let { CallAudioMode.fromStored(it.mode) } ?: config.selectedAudioMode.also {
             dao.saveNumberPool(CallNumberPoolEntity(number = normalizedNumber, mode = it.name))
         }
-        val entryStatusId = if (forceDialing) {
-            config.statuses.firstOrNull { it.stage == CallStage.DIALING }?.id ?: config.initialStatusId
-        } else preferredStatusId?.takeIf { id -> config.statuses.any { it.id == id } } ?: config.initialStatusId
-        return CallSessionSetup(mode, entryStatusId, config)
+        return CallSessionSetup(mode, "dialing", config, variant)
     }
 
     suspend fun addMedia(entry: CallMediaEntry) {
@@ -251,11 +258,39 @@ private fun ManualCallEntity.toManualCall() = ManualCall(
 private fun CallMediaEntry.toEntity() = CallMediaEntity(id, mode.name, title, filePath, mimeType, iconPath)
 private fun CallMediaEntity.toCallMediaEntry() = CallMediaEntry(id, CallAudioMode.fromStored(mode), title, filePath, mimeType, iconPath)
 
+private fun normalizeStatuses(statuses: List<CallStatusRule>): List<CallStatusRule> {
+    val validIds = statuses.map(CallStatusRule::id).toSet()
+    return statuses.map { status -> status.copy(
+        durationSeconds = status.durationSeconds.coerceIn(0, 86_400),
+        audioPlayCount = status.audioPlayCount.coerceIn(0, 99),
+        timeoutTargetId = status.timeoutTargetId?.takeIf { it in validIds },
+        buttons = status.buttons.map { button -> button.copy(
+            visible = true,
+            targetStatusId = button.targetStatusId?.takeIf { it in validIds },
+        ) },
+    ) }
+}
+
+private fun normalizeConfiguration(configuration: CallFlowConfiguration, previous: CallFlowConfiguration): CallFlowConfiguration {
+    val complete = configuration.withRequiredCallStatuses(previous).withProgrammedCallFlow()
+    return complete.copy(
+        initialStatusId = complete.initialStatusId.takeIf { id -> complete.statuses.any { it.id == id } } ?: "dialing",
+        statuses = normalizeStatuses(complete.statuses),
+        avatarInitialStatusId = complete.avatarInitialStatusId.takeIf { id -> complete.avatarStatuses.any { it.id == id } } ?: "dialing",
+        avatarStatuses = normalizeStatuses(complete.avatarStatuses),
+    )
+}
+
 private fun encodeConfiguration(config: CallFlowConfiguration): String = JSONObject().apply {
     put("initialStatusId", config.initialStatusId)
+    put("avatarInitialStatusId", config.avatarInitialStatusId)
     put("selectedAudioMode", config.selectedAudioMode.name)
-    put("statuses", JSONArray().apply {
-        config.statuses.forEach { status -> put(JSONObject().apply {
+    put("statuses", encodeStatuses(config.statuses))
+    put("avatarStatuses", encodeStatuses(config.avatarStatuses))
+}.toString()
+
+private fun encodeStatuses(statuses: List<CallStatusRule>): JSONArray = JSONArray().apply {
+        statuses.forEach { status -> put(JSONObject().apply {
             put("id", status.id); put("name", status.name); put("stage", status.stage.name)
             put("durationSeconds", status.durationSeconds); put("timeoutTargetId", status.timeoutTargetId ?: JSONObject.NULL)
             put("outcome", status.outcome ?: JSONObject.NULL)
@@ -263,6 +298,7 @@ private fun encodeConfiguration(config: CallFlowConfiguration): String = JSONObj
             put("soundEntryId", status.soundEntryId ?: JSONObject.NULL)
             put("playSoundOnce", status.playSoundOnce)
             put("soundMuted", status.soundMuted)
+            put("audioPlayCount", status.audioPlayCount)
             put("callerNameStyle", status.callerNameStyle.toJson())
             put("callerNumberStyle", status.callerNumberStyle.toJson())
             put("locationTextStyle", status.locationTextStyle.toJson())
@@ -274,18 +310,31 @@ private fun encodeConfiguration(config: CallFlowConfiguration): String = JSONObj
                 put("visualStyle", button.visualStyle.toJson())
             }) } })
         }) }
-    })
-}.toString()
+}
 
 private fun decodeConfiguration(raw: String): CallFlowConfiguration = runCatching {
     val root = JSONObject(raw)
-    val statusesJson = root.optJSONArray("statuses") ?: JSONArray()
+    val statuses = decodeStatuses(root.optJSONArray("statuses") ?: JSONArray())
+    val avatarStatuses = root.optJSONArray("avatarStatuses")?.let(::decodeStatuses) ?: statuses
+    val ids = statuses.map { it.id }.toSet()
+    val avatarIds = avatarStatuses.map { it.id }.toSet()
+    CallFlowConfiguration(
+        initialStatusId = root.optString("initialStatusId", "dialing").takeIf { it in ids } ?: statuses.first().id,
+        selectedAudioMode = CallAudioMode.fromStored(root.optString("selectedAudioMode")),
+        statuses = statuses,
+        avatarInitialStatusId = root.optString("avatarInitialStatusId", root.optString("initialStatusId", "dialing"))
+            .takeIf { it in avatarIds } ?: avatarStatuses.first().id,
+        avatarStatuses = avatarStatuses,
+    ).let { it.withRequiredCallStatuses(it).withProgrammedCallFlow() }
+}.getOrElse { CallFlowConfiguration() }
+
+private fun decodeStatuses(statusesJson: JSONArray): List<CallStatusRule> {
     val statuses = buildList {
         for (i in 0 until statusesJson.length()) {
             val item = statusesJson.optJSONObject(i) ?: continue
             val stage = CallStage.entries.firstOrNull { it.name == item.optString("stage") } ?: CallStage.WAITING
             val buttonsJson = item.optJSONArray("buttons") ?: JSONArray()
-            val buttons = buildList {
+            val storedButtons = buildList {
                 for (j in 0 until buttonsJson.length()) {
                     val button = buttonsJson.optJSONObject(j) ?: continue
                     val storedId = button.optString("id")
@@ -298,6 +347,12 @@ private fun decodeConfiguration(raw: String): CallFlowConfiguration = runCatchin
                     add(CallButtonRule(id, button.optBoolean("visible", true), button.optBoolean("enabled", true), button.optString("targetStatusId").takeIf { it.isNotBlank() && it != "null" }, button.optString("label").takeIf { it.isNotBlank() && it != "null" }, button.optJSONObject("visualStyle")?.toVisualStyle() ?: CallVisualStyle()))
                 }
             }.ifEmpty { com.lastcoffee.top.oppo_call_compose.model.defaultButtons(stage) }
+            val wasLegacyOutgoingDefaults = stage in setOf(CallStage.DIALING, CallStage.WAITING) &&
+                storedButtons.size == CallButtonId.entries.size && storedButtons.all { button ->
+                    button.visible && button.enabled == (button.id == CallButtonId.SPEAKER || button.id == CallButtonId.HANGUP) &&
+                        button.targetStatusId == null && button.label == null && button.visualStyle == CallVisualStyle()
+                }
+            val buttons = if (wasLegacyOutgoingDefaults) com.lastcoffee.top.oppo_call_compose.model.defaultButtons(stage) else storedButtons
             add(CallStatusRule(
                 id = item.optString("id", "status-$i"), name = item.optString("name", "状态 ${i + 1}"), stage = stage,
                 durationSeconds = item.optInt("durationSeconds", 0), timeoutTargetId = item.optString("timeoutTargetId").takeIf { it.isNotBlank() && it != "null" },
@@ -306,19 +361,16 @@ private fun decodeConfiguration(raw: String): CallFlowConfiguration = runCatchin
                 soundEntryId = item.optString("soundEntryId").takeIf { it.isNotBlank() && it != "null" },
                 playSoundOnce = item.optBoolean("playSoundOnce", false),
                 soundMuted = item.optBoolean("soundMuted", false),
+                audioPlayCount = item.optInt("audioPlayCount", 0).coerceIn(0, 99),
                 callerNameStyle = item.optJSONObject("callerNameStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 callerNumberStyle = item.optJSONObject("callerNumberStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 locationTextStyle = item.optJSONObject("locationTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 statusTextStyle = item.optJSONObject("statusTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
-            ))
+            ).withVisibleCallButtons())
         }
     }.ifEmpty { defaultCallStatuses() }
-    val ids = statuses.map { it.id }.toSet()
-    CallFlowConfiguration(
-        initialStatusId = root.optString("initialStatusId", "dialing").takeIf { it in ids } ?: statuses.first().id,
-        selectedAudioMode = CallAudioMode.fromStored(root.optString("selectedAudioMode")), statuses = statuses,
-    )
-}.getOrElse { CallFlowConfiguration() }
+    return statuses
+}
 
 private fun CallVisualStyle.toJson() = JSONObject().apply {
     put("offsetXdp", offsetXdp); put("offsetYdp", offsetYdp)

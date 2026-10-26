@@ -52,5 +52,8 @@ internal fun matchingDialContacts(contacts: List<ContactMatch>, query: String): 
 
 internal fun CallRecord.homeAttribution(resolved: String?): String =
     resolved?.takeIf(String::isNotBlank)
-        ?: listOfNotNull(attribution?.takeIf(String::isNotBlank), operator?.takeIf(String::isNotBlank))
-            .joinToString(" ").ifBlank { description.takeUnless { it.startsWith("呼") || it.startsWith("未接") || it == "拒接" }.orEmpty() }
+        ?: listOfNotNull(attribution?.filterNot(Char::isWhitespace)?.takeIf(String::isNotBlank), operator?.trim()?.takeIf(String::isNotBlank))
+            .joinToString(" ").ifBlank {
+                description.takeUnless { it.startsWith("呼") || it.startsWith("未接") || it == "拒接" }
+                    .orEmpty().ifBlank { "未知归属地" }
+            }

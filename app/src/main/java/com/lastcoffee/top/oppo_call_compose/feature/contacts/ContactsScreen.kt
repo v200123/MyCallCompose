@@ -68,7 +68,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lastcoffee.top.oppo_call_compose.R
-import com.lastcoffee.top.oppo_call_compose.data.demoContacts
 import com.lastcoffee.top.oppo_call_compose.model.ContactMatch
 import java.text.Collator
 import java.util.Locale
@@ -87,7 +86,7 @@ fun ContactsScreen(
     onShowContact: (ContactMatch) -> Unit,
     startSearching: Boolean = false,
     onExitSearch: (() -> Unit)? = null,
-    contacts: List<ContactMatch> = demoContacts,
+    contacts: List<ContactMatch> = emptyList(),
     onSaveContact: (ContactMatch) -> Unit = {},
     newContactNumber: String? = null,
     existingContactNumber: String? = null,
