@@ -502,7 +502,7 @@ private fun CallList(
             CallRow(record, location = record.homeAttribution(locationFor(record.homeNumber())),
                 onInfo = { onInfo(record) }, onCall = { if (editing) onSelect(group) else onCall(record) },
                 onLongPress = { onLongPress(group) }, showDivider = index < groups.lastIndex,
-                callCount = group.calls.size, showSim = showSim, editing = editing,
+                callCount = group.calls.count { it.kind == CallKind.MISSED }, showSim = showSim, editing = editing,
                 selected = group.key in selectedKeys)
         }
         item { Spacer(modifier = Modifier.height(contentBottomPadding)) }
@@ -517,7 +517,7 @@ private fun CallRow(record: CallRecord, location: String?, onInfo: () -> Unit, o
     val missed = record.kind == CallKind.MISSED
     val primaryColor = if (missed) MissedRed else OppoPrimary
     val displayName = if (record.number.any(Char::isLetter)) record.number else formatDialNumber(record.number)
-    val title = displayName + if (callCount > 1) " ($callCount)" else ""
+    val title = displayName + if (missed && callCount > 1) " ($callCount)" else ""
     Box(Modifier.fillMaxWidth().combinedClickable(onClick = onCall, onLongClick = onLongPress)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 16.dp), verticalAlignment = Alignment.Top) {
             if (editing) {
