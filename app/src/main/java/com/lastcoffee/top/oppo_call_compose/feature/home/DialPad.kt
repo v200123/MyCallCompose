@@ -117,20 +117,25 @@ internal fun OppoDialPad(
                         row.forEach { key ->
                             val interactionSource = rememberDialpadToneInteractionSource(key.digit, playTone)
                             Box(
-                                Modifier.weight(1f).height(58.dp).combinedClickable(
-                                    interactionSource = interactionSource,
-                                    onClickLabel = "输入${key.digit}",
-                                    onClick = { onNumberChange(number + key.digit) },
-                                    onLongClick = when {
-                                        key.digit == "0" -> ({ onNumberChange(number + "+") })
-                                        key.digit == "*" && number.isNotEmpty() -> ({ onNumberChange(number + ",") })
-                                        key.digit == "#" && number.isNotEmpty() -> ({ onNumberChange(number + ";") })
-                                        else -> null
-                                    },
-                                ),
+                                Modifier.weight(1f).height(58.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                OppoDialKeyContent(key)
+                                Box(
+                                    Modifier.size(58.dp).clip(CircleShape).combinedClickable(
+                                        interactionSource = interactionSource,
+                                        onClickLabel = "输入${key.digit}",
+                                        onClick = { onNumberChange(number + key.digit) },
+                                        onLongClick = when {
+                                            key.digit == "0" -> ({ onNumberChange(number + "+") })
+                                            key.digit == "*" && number.isNotEmpty() -> ({ onNumberChange(number + ",") })
+                                            key.digit == "#" && number.isNotEmpty() -> ({ onNumberChange(number + ";") })
+                                            else -> null
+                                        },
+                                    ),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    OppoDialKeyContent(key)
+                                }
                             }
                         }
                     }
@@ -140,8 +145,10 @@ internal fun OppoDialPad(
                 Modifier.widthIn(max = 512.dp).fillMaxWidth().height(56.dp).padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.weight(1f).height(56.dp).clickable(onClick = onDismiss), contentAlignment = Alignment.Center) {
-                    Image(painterResource(R.drawable.oppo_pb_ic_hide_dial), "收起拨号盘", Modifier.size(24.dp))
+                Box(Modifier.weight(1f).height(56.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(56.dp).clip(CircleShape).clickable(onClick = onDismiss), contentAlignment = Alignment.Center) {
+                        Image(painterResource(R.drawable.oppo_pb_ic_hide_dial), "收起拨号盘", Modifier.size(24.dp))
+                    }
                 }
                 if (simLabels.size > 1) {
                     Row(Modifier.width(222.dp).height(40.dp)) {
@@ -160,17 +167,19 @@ internal fun OppoDialPad(
                         }
                     }
                 }
-                Box(
-                    Modifier.weight(1f).height(56.dp).combinedClickable(
-                        onClick = { onNumberChange(number.dropLast(1)) },
-                        onLongClick = { onNumberChange("") },
-                    ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painterResource(if (number.isEmpty()) R.drawable.oppo_pb_dr_dial_delete_disabled else R.drawable.oppo_pb_dr_dial_delete_normal),
-                        "删除号码，长按清空", Modifier.size(24.dp), tint = Color.Unspecified,
-                    )
+                Box(Modifier.weight(1f).height(56.dp), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier.size(56.dp).clip(CircleShape).combinedClickable(
+                            onClick = { onNumberChange(number.dropLast(1)) },
+                            onLongClick = { onNumberChange("") },
+                        ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painterResource(if (number.isEmpty()) R.drawable.oppo_pb_dr_dial_delete_disabled else R.drawable.oppo_pb_dr_dial_delete_normal),
+                            "删除号码，长按清空", Modifier.size(24.dp), tint = Color.Unspecified,
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(20.dp))
