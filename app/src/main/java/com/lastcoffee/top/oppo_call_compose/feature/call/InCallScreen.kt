@@ -148,8 +148,13 @@ internal fun InCallScreen(
     onRingbackStarted: (String) -> Unit = {},
     onCallFinished: suspend (ManualCall) -> Unit,
 ) {
-    val executor = remember(number, configuration, initialStatusId) {
-        CallRuleExecutor(configuration, initialStatusId, SystemClock.elapsedRealtime())
+    val promptType = extras.promptFor(number)
+    val requestedPromptId = promptType?.let { extras.promptRuleFor(it, screenVariant) }
+    val promptRuleId = configuration.statuses.firstOrNull { it.id == requestedPromptId && it.stage == CallStage.OUTCOME }?.id
+        ?: configuration.statuses.firstOrNull { it.id == promptType?.legacyStatusId && it.stage == CallStage.OUTCOME }?.id
+        ?: if (promptType != null) configuration.statuses.firstOrNull { it.stage == CallStage.OUTCOME }?.id else null
+    val executor = remember(number, configuration, initialStatusId, promptRuleId) {
+        CallRuleExecutor(configuration, initialStatusId, SystemClock.elapsedRealtime(), promptRuleId)
     }
     var executionStep by remember(executor) { mutableStateOf(executor.step) }
     val stepRevision = executionStep.revision
@@ -165,11 +170,8 @@ internal fun InCallScreen(
     var dtmfDigits by remember { mutableStateOf("") }
     var elapsedSeconds by remember { mutableIntStateOf(0) }
     val callStartedAtMillis = remember(number) { System.currentTimeMillis() }
-    val callStartedAtElapsed = remember(number) { SystemClock.elapsedRealtime() }
     val context = LocalContext.current
     var ringbackVideoError by remember { mutableStateOf(false) }
-    var callOutcome by remember(number) { mutableStateOf(activeRule.outcome?.let { value -> CallOutcome.entries.firstOrNull { it.name == value } }) }
-    var promptPlaying by remember(number) { mutableStateOf(false) }
     val isPreview = LocalInspectionMode.current
     val hangupPhrase = remember(context) { runCatching { voiceHangupPhrase(context) }.getOrDefault("语音口令") }
     var microphoneGranted by remember {
@@ -183,14 +185,17 @@ internal fun InCallScreen(
     val lifecycleOwner = context as? LifecycleOwner
     var isResumed by remember { mutableStateOf(lifecycleOwner?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) ?: true) }
     val contact = resolvedContact
-    val configuredPromptType = extras.promptFor(number)
-    val promptRuleId = configuredPromptType?.let { extras.promptRuleFor(it, screenVariant) }
     val promptTargetRule = promptRuleId?.let { selectedId ->
         executor.statuses.firstOrNull { it.id == selectedId && it.stage == CallStage.OUTCOME }
-    } ?: executor.statuses.firstOrNull { it.id == configuredPromptType?.legacyStatusId && it.stage == CallStage.OUTCOME }
-    val promptType = configuredPromptType
-    val promptRuleActive = promptPlaying &&
-        (activeStatusId == promptTargetRule?.id || (promptTargetRule == null && callState == CallSessionState.PLAYING_OUTCOME))
+    }
+    val promptRuleActive = promptType != null && activeStatusId == promptTargetRule?.id
+    val callOutcome = activeRule.outcome?.let { value -> CallOutcome.entries.firstOrNull { it.name == value } }
+        ?: if (promptRuleActive) when (promptType) {
+            CallPromptType.POWER_OFF -> CallOutcome.POWERED_OFF
+            CallPromptType.EMPTY_NUMBER -> CallOutcome.EMPTY_NUMBER
+            CallPromptType.BUSY -> CallOutcome.BUSY
+            CallPromptType.UNREACHABLE -> CallOutcome.UNREACHABLE
+        } else null
     val displayName = contact?.name ?: if (normalizePhoneNumber(number) == "10086") "中国移动" else number
     val displayNumber = contact?.number
     // An avatar belongs to the caller identity, not to the call's connection state.
@@ -200,12 +205,12 @@ internal fun InCallScreen(
     val mediaForMode = remember(mode, mediaEntries) { mediaEntries.filter { it.mode == mode && mode.acceptsMimeType(it.mimeType) && File(it.filePath).exists() } }
     val ringbackVideos = remember(mediaEntries) { mediaEntries.filter { it.mode == CallAudioMode.RINGBACK && it.mimeType.startsWith("video/") && File(it.filePath).isFile } }
     val randomRingbackId = remember(number, ringbackVideos) { ringbackVideos.randomOrNull()?.id }
-    val currentMedia = remember(activeStatusId, activeRule.mediaEntryId, activeRule.playSoundOnce, mediaForMode, mediaEntries, extras, number, randomRingbackId, callState, promptPlaying) {
+    val currentMedia = remember(activeStatusId, activeRule.mediaEntryId, activeRule.playSoundOnce, mediaForMode, mediaEntries, extras, number, randomRingbackId, callState, promptRuleActive) {
         val selectedMedia = mediaEntries.firstOrNull {
             it.id == activeRule.mediaEntryId && it.mode.isCallMode && it.mode.acceptsMimeType(it.mimeType) &&
                 File(it.filePath).isFile && (!extras.blocksRingback(number) || !it.mimeType.startsWith("video/"))
         }
-        if (activeRule.playSoundOnce || (promptType != null && (callState == CallSessionState.DIALING || callState == CallSessionState.WAITING_FOR_ANSWER))) null
+        if (activeRule.playSoundOnce) null
         else if (promptRuleActive) mediaEntries.firstOrNull {
             it.id == activeRule.mediaEntryId && (it.mimeType.startsWith("audio/") || it.mimeType.startsWith("video/")) && File(it.filePath).isFile
         }
@@ -225,19 +230,18 @@ internal fun InCallScreen(
             mediaForMode.filter { !it.mimeType.startsWith("video/") }.randomOrNull()
         }
     }
-    val currentSound = remember(activeRule.soundEntryId, activeRule.playSoundOnce, activeRule.soundMuted, mediaEntries, promptType, callState, promptPlaying) {
-        if (!activeRule.playSoundOnce || activeRule.soundMuted || (promptType != null && (callState == CallSessionState.DIALING || callState == CallSessionState.WAITING_FOR_ANSWER))) null else mediaEntries.firstOrNull {
+    val currentSound = remember(activeRule.soundEntryId, activeRule.playSoundOnce, activeRule.soundMuted, mediaEntries, promptType, callState) {
+        if (!activeRule.playSoundOnce || activeRule.soundMuted) null else mediaEntries.firstOrNull {
             it.id == activeRule.soundEntryId && it.mimeType.startsWith("audio/") && File(it.filePath).exists()
         }
     }
     var playingStatusSoundCount by remember { mutableIntStateOf(0) }
     val statusSoundPlayers = remember { mutableListOf<MediaPlayer>() }
-    val promptUsesRuleAudio = promptRuleActive && (currentSound != null ||
+    val promptUsesRuleAudio = promptRuleActive && ((activeRule.playSoundOnce && activeRule.soundMuted) || currentSound != null ||
         (currentMedia != null && (!currentMedia.mimeType.startsWith("video/") || !ringbackVideoError)))
 
     fun refreshExecution() {
         executionStep = executor.step
-        callOutcome = executionStep.rule.outcome?.let { value -> CallOutcome.entries.firstOrNull { it.name == value } }
         elapsedSeconds = sessionTiming.elapsedSeconds(SystemClock.elapsedRealtime())
         if (executionStep.rule.stage in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)) {
             recording = false
@@ -283,26 +287,6 @@ internal fun InCallScreen(
         val remainingMillis = (connectedAtMillis + delaySeconds * 1_000L - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
         delay(remainingMillis)
         requestHangup()
-    }
-
-    LaunchedEffect(number, promptType, promptRuleId, stepRevision, promptPlaying) {
-        val type = promptType ?: return@LaunchedEffect
-        if (promptPlaying || (callState != CallSessionState.DIALING && callState != CallSessionState.WAITING_FOR_ANSWER)) return@LaunchedEffect
-        val remaining = (callStartedAtElapsed + type.delayMillis - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
-        delay(remaining)
-        if (callState != CallSessionState.DIALING && callState != CallSessionState.WAITING_FOR_ANSWER) return@LaunchedEffect
-        val target = promptTargetRule
-        promptPlaying = true
-        val fallbackOutcome = when (type) {
-            CallPromptType.POWER_OFF -> CallOutcome.POWERED_OFF
-            CallPromptType.EMPTY_NUMBER -> CallOutcome.EMPTY_NUMBER
-            CallPromptType.BUSY -> CallOutcome.BUSY
-            CallPromptType.UNREACHABLE -> CallOutcome.UNREACHABLE
-        }
-        if (target != null) transitionToStatus(target.id) else {
-            executor.statuses.firstOrNull { it.stage == CallStage.OUTCOME }?.let { transitionToStatus(it.id) }
-        }
-        callOutcome = target?.outcome?.let { value -> CallOutcome.entries.firstOrNull { it.name == value } } ?: fallbackOutcome
     }
 
     DisposableEffect(context) {
@@ -400,7 +384,7 @@ internal fun InCallScreen(
     }
 
     DisposableEffect(stepRevision, promptRuleActive, promptType, promptUsesRuleAudio, isResumed) {
-        if (callState == CallSessionState.PLAYING_OUTCOME && promptRuleActive && promptType != null && !promptUsesRuleAudio && isResumed) {
+        if (callState == CallSessionState.PLAYING_OUTCOME && promptRuleActive && !promptUsesRuleAudio && isResumed) {
             val rawId = when (promptType) {
                 CallPromptType.POWER_OFF -> R.raw.audio_power_off
                 CallPromptType.EMPTY_NUMBER -> R.raw.audio_empty_number
@@ -469,7 +453,7 @@ internal fun InCallScreen(
                 player.prepareAsync()
             }.onFailure { player.release() }
             try {
-                if (activeRule.durationSeconds > 0) delay(activeRule.durationSeconds * 1_000L) else kotlinx.coroutines.awaitCancellation()
+                kotlinx.coroutines.awaitCancellation()
             } finally {
                 runCatching { player.setOnCompletionListener(null); player.setOnPreparedListener(null) }
                 runCatching { if (player.isPlaying) player.stop() }
@@ -545,6 +529,8 @@ internal fun InCallScreen(
             key(stepRevision, videoSource) {
                 RingbackVideo(
                     uri = videoSource,
+                    playCount = activeRule.audioPlayCount,
+                    onFinished = { onStepAudioFinished(stepRevision) },
                     onError = { if (executor.isCurrent(stepRevision)) ringbackVideoError = true },
                     onStarted = { if (executor.isCurrent(stepRevision) && isOutgoing) onRingbackStarted(number) },
                 )
@@ -771,15 +757,23 @@ private fun InCallHangup(rule: CallButtonRule, enabled: Boolean, onClick: () -> 
 }
 
 @Composable
-private fun RingbackVideo(uri: Uri, onError: () -> Unit, onStarted: () -> Unit) {
+private fun RingbackVideo(uri: Uri, playCount: Int, onError: () -> Unit, onStarted: () -> Unit, onFinished: () -> Unit) {
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
             VideoView(context).apply {
+                var completedPlays = 0
                 setOnPreparedListener { player ->
-                    player.isLooping = true
+                    player.isLooping = playCount == 0
                     start()
                     onStarted()
+                }
+                if (playCount > 0) setOnCompletionListener {
+                    completedPlays++
+                    if (completedPlays < playCount) {
+                        seekTo(0)
+                        start()
+                    } else onFinished()
                 }
                 setOnErrorListener { _, _, _ ->
                     onError()

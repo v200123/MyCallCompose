@@ -42,11 +42,11 @@ private fun mainlandMobileDigits(number: String): String? {
     return mobile.takeIf(mainlandMobilePattern::matches)
 }
 
-enum class CallPromptType(val title: String, val delayMillis: Long, val legacyStatusId: String) {
-    POWER_OFF("关机提示音号码", 1_000L, "powered_off"),
-    EMPTY_NUMBER("空号提示音号码", 1_000L, "empty_number"),
-    BUSY("用户正忙提示音号码", 1_000L, "busy"),
-    UNREACHABLE("无法接通提示音号码", 3_000L, "unreachable"),
+enum class CallPromptType(val title: String, val legacyStatusId: String) {
+    POWER_OFF("关机提示音号码", "powered_off"),
+    EMPTY_NUMBER("空号提示音号码", "empty_number"),
+    BUSY("用户正忙提示音号码", "busy"),
+    UNREACHABLE("无法接通提示音号码", "unreachable"),
 }
 
 data class PhoneExtras(

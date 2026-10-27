@@ -34,6 +34,41 @@ class CallRuleExecutorTest {
         assertEquals("disconnected", runner.step.rule.id)
     }
 
+    @Test fun promptNumberHonorsDialingWaitingAndPromptDurations() {
+        val defaults = CallFlowConfiguration().withProgrammedCallFlow()
+        val configuration = defaults.copy(statuses = defaults.statuses.map { status -> when (status.id) {
+            "dialing" -> status.copy(durationSeconds = 2)
+            "waiting" -> status.copy(durationSeconds = 4)
+            "busy" -> status.copy(durationSeconds = 3)
+            else -> status
+        } })
+        val runner = CallRuleExecutor(configuration, "dialing", 0, promptStatusId = "busy")
+
+        assertFalse(runner.advanceIfDue(0, 1_000))
+        assertTrue(runner.advanceIfDue(0, 2_000))
+        assertEquals("waiting", runner.step.rule.id)
+        assertFalse(runner.advanceIfDue(1, 5_999))
+        assertTrue(runner.advanceIfDue(1, 6_000))
+        assertEquals("busy", runner.step.rule.id)
+        assertFalse(runner.audioFinished(2, 6_500))
+        assertFalse(runner.advanceIfDue(2, 8_999))
+        assertTrue(runner.advanceIfDue(2, 9_000))
+        assertEquals("disconnecting", runner.step.rule.id)
+    }
+
+    @Test fun untimedWaitingAudioFinishesIntoPromptInsteadOfActiveCall() {
+        val defaults = CallFlowConfiguration().withProgrammedCallFlow()
+        val configuration = defaults.copy(statuses = defaults.statuses.map { status ->
+            if (status.id == "waiting") status.copy(durationSeconds = 0) else status
+        })
+        val runner = CallRuleExecutor(configuration, "dialing", 0, promptStatusId = "busy")
+
+        assertTrue(runner.advanceIfDue(0, 1_000))
+        assertNull(runner.remainingMillis(60_000))
+        assertTrue(runner.audioFinished(1, 5_000))
+        assertEquals("busy", runner.step.rule.id)
+    }
+
     @Test fun completeCallRunsThroughConfiguredStepsWithoutButtonInput() {
         val runner = executor(
             CallStatusRule("dial", "呼叫", CallStage.DIALING, 1, "wait"),
@@ -148,6 +183,19 @@ class CallRuleExecutorTest {
         assertFalse(runner.moveTo("talk", 2_001))
         assertFalse(runner.hangup(2_001))
         assertTrue(runner.claimCompletion(1, 3_000))
+    }
+
+    @Test fun zeroSecondTerminalStepsCompleteImmediately() {
+        val runner = executor(
+            CallStatusRule("talk", "通话", CallStage.ACTIVE),
+            CallStatusRule("ending", "挂断", CallStage.DISCONNECTING, 0, "end"),
+            CallStatusRule("end", "结束", CallStage.DISCONNECTED, 0),
+        )
+
+        assertTrue(runner.hangup(2_000))
+        assertEquals(0L, runner.remainingMillis(2_000))
+        assertTrue(runner.advanceIfDue(1, 2_000))
+        assertTrue(runner.claimCompletion(2, 2_000))
     }
 
     @Test fun backgroundTimeDoesNotRestartTheEntryDeadline() {

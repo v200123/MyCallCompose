@@ -45,6 +45,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -113,6 +114,7 @@ fun CallRulesScreen(
 ) {
     var variant by remember { mutableStateOf(CallScreenVariant.WITHOUT_AVATAR) }
     var current by remember(variant) { mutableStateOf(config.forVariant(variant)) }
+    LaunchedEffect(config, variant) { current = config.forVariant(variant) }
     var editing by remember { mutableStateOf<CallStatusRule?>(null) }
     SettingsFrame("${variant.title}规则", onBack) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -133,7 +135,12 @@ fun CallRulesScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(status.name, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-                                Text("${status.stage.title} · ${if (status.durationSeconds > 0) "${status.durationSeconds} 秒" else "不自动计时"}", color = Color(0xFF707782))
+                                val durationLabel = when {
+                                    status.durationSeconds > 0 -> "${status.durationSeconds} 秒"
+                                    status.stage == CallStage.DISCONNECTING || status.stage == CallStage.DISCONNECTED -> "立即完成"
+                                    else -> "不自动计时"
+                                }
+                                Text("${status.stage.title} · $durationLabel", color = Color(0xFF707782))
                                 val audioName = if (status.playSoundOnce) {
                                     if (status.soundMuted) "静音" else mediaEntries.firstOrNull { it.id == status.soundEntryId }?.title ?: "未选择提示音"
                                 } else mediaEntries.firstOrNull { it.id == status.mediaEntryId }?.title ?: "号码音频池随机"
@@ -167,7 +174,8 @@ fun CallRulesScreen(
             onDismiss = { editing = null },
             onApply = { updated ->
                 current = current.copy(statuses = current.statuses.map { if (it.id == updated.id) updated else it })
-                editing = null; onSave(variant, current)
+                editing = null
+                onSave(variant, current)
             },
         )
     }
@@ -220,7 +228,7 @@ private fun StatusEditorDialog(
         text = {
             LazyColumn {
                 item { OutlinedTextField(name, { name = it }, label = { Text("状态名称") }, singleLine = true) }
-                item { OutlinedTextField(duration, { duration = it.filter(Char::isDigit).take(5) }, label = { Text("状态时长（秒，0 表示不按时间推进）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true) }
+                item { OutlinedTextField(duration, { duration = it.filter(Char::isDigit).take(5) }, label = { Text(if (initial.stage == CallStage.DISCONNECTING || initial.stage == CallStage.DISCONNECTED) "状态时长（秒，0 表示立即完成）" else "状态时长（秒，0 表示不按时间推进）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true) }
                 item {
                     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -274,7 +282,7 @@ private fun StatusEditorDialog(
                 }
                 item {
                     Text(
-                        "状态顺序由程序决定。时长为 0 时不按时间推进；接通和保持状态可由挂断或操作结束。",
+                        "状态顺序由程序决定。普通状态时长为 0 时不按时间推进；挂断步骤的 0 秒表示立即完成。",
                         color = Color(0xFF707782), fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp),
                     )
                 }

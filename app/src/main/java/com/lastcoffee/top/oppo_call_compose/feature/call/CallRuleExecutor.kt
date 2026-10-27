@@ -10,11 +10,13 @@ internal class CallRuleExecutor(
     configuration: CallFlowConfiguration,
     initialStatusId: String,
     startedAt: Long,
+    promptStatusId: String? = null,
 ) {
     data class Step(val rule: CallStatusRule, val revision: Long)
 
     val statuses = configuration.statuses.ifEmpty { defaultCallStatuses() }
     private val rules = statuses.associateBy { it.id }
+    private val promptRule = promptStatusId?.let(rules::get)?.takeIf { it.stage == CallStage.OUTCOME }
     val timing = CallSessionTiming(startedAt)
     var step = Step(rules[initialStatusId] ?: rules[configuration.initialStatusId] ?: rules.values.first(), 0)
         private set
@@ -46,6 +48,7 @@ internal class CallRuleExecutor(
     }
 
     private fun nextRule(): CallStatusRule? {
+        if (step.rule.stage == CallStage.WAITING && promptRule != null) return promptRule
         val configured = step.rule.timeoutTargetId?.let(rules::get)
         return if (step.rule.stage == CallStage.DISCONNECTING) {
                 configured?.takeIf { it.stage == CallStage.DISCONNECTED }
@@ -59,7 +62,7 @@ internal class CallRuleExecutor(
         val rule = step.rule
         val terminal = rule.stage in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)
         if (!terminal && (rule.durationSeconds <= 0 || nextRule() == null)) return null
-        return timing.remainingStatusMillis(if (terminal) rule.durationSeconds.coerceAtLeast(1) else rule.durationSeconds, now)
+        return timing.remainingStatusMillis(rule.durationSeconds, now)
     }
 
     fun advanceIfDue(revision: Long, now: Long): Boolean {
@@ -72,7 +75,7 @@ internal class CallRuleExecutor(
     fun audioFinished(revision: Long, now: Long): Boolean {
         if (!isCurrent(revision) || step.rule.durationSeconds > 0) return false
         if (step.rule.stage == CallStage.ACTIVE || step.rule.stage == CallStage.HOLD) return false
-        val target = step.rule.timeoutTargetId?.let(rules::get) ?: return false
+        val target = nextRule() ?: return false
         return enter(target, now)
     }
 
