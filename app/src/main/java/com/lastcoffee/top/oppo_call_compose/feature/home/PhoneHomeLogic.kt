@@ -17,16 +17,17 @@ internal data class HomeCallGroup(val calls: List<CallRecord>) {
 internal fun CallRecord.homeNumber(): String =
     (if (number.any(Char::isLetter)) description else number).filter { it.isDigit() || it in "+*#" }
 
-/** CallLogGroupHandler groups consecutive equal normalized numbers, not all history. */
+/** Show each dialable number once, with its calls ordered from newest to oldest. */
 internal fun groupHomeCalls(records: List<CallRecord>, missedOnly: Boolean = false): List<HomeCallGroup> {
-    val groups = mutableListOf<MutableList<CallRecord>>()
-    records.sortedByDescending { it.timeMillis }.forEach { record ->
-        val previous = groups.lastOrNull()
-        if (previous != null && record.homeNumber().isNotEmpty() && previous.first().homeNumber() == record.homeNumber()) {
-            previous.add(record)
-        } else groups.add(mutableListOf(record))
-    }
-    return groups.map { HomeCallGroup(it) }.filter { !missedOnly || it.latest.kind == CallKind.MISSED }
+    val groups = linkedMapOf<String, MutableList<CallRecord>>()
+    records.asSequence()
+        .filter { !missedOnly || it.kind == CallKind.MISSED }
+        .sortedByDescending { it.timeMillis }
+        .forEachIndexed { index, record ->
+            val key = record.homeNumber().ifEmpty { "unknown:$index" }
+            groups.getOrPut(key) { mutableListOf() }.add(record)
+        }
+    return groups.values.map(::HomeCallGroup)
 }
 
 internal fun homeCallDate(record: CallRecord, today: LocalDate = LocalDate.now()): String {
