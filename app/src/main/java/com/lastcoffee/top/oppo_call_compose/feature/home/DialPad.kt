@@ -76,7 +76,7 @@ internal fun OppoDialNumberHeader(number: String, location: String?, showDivider
             Modifier.fillMaxWidth().weight(4f).padding(horizontal = 24.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(displayNumber, style = oppoTextStyle(textSize, weight = FontWeight.SemiBold),
+            Text(displayNumber, style = oppoTextStyle(textSize, weight = FontWeight.Bold),
                 maxLines = 1, overflow = TextOverflow.Clip)
         }
         Box(Modifier.fillMaxWidth().weight(2.5f), contentAlignment = Alignment.TopCenter) {

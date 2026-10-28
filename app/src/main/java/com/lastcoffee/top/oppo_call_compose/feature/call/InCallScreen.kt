@@ -650,7 +650,7 @@ internal fun InCallScreen(
                                                 CallButtonId.ADD_CALL -> R.drawable.incall_btn_add_call
                                                 CallButtonId.MUTE -> if (muted) R.drawable.incall_btn_mute_call_selected else R.drawable.incall_btn_mute_call
                                                 CallButtonId.VIDEO_CALL -> R.drawable.incall_btn_change_to_video
-                                                CallButtonId.AI_CALL_ASSISTANT -> R.drawable.incall_btn_call_assistant
+                                                CallButtonId.AI_CALL_ASSISTANT -> R.drawable.call_asst
                                                 CallButtonId.SPEAKER -> if (speakerOn) R.drawable.incall_btn_audiomode_speaker_selected else R.drawable.incall_btn_audiomode_speaker
                                                 else -> if (dialpadOpen) R.drawable.incall_btn_dialpad_selected else R.drawable.incall_btn_dialpad
                                             }

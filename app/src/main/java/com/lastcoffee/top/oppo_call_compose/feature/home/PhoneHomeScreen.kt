@@ -567,11 +567,11 @@ private fun DialSearchResults(number: String, records: List<CallRecord>, allCont
                               onCreateContact: (String) -> Unit, onSaveExisting: (String) -> Unit) {
     val contacts = remember(allContacts, number) { matchingDialContacts(allContacts, number) }
     val matches = remember(records, contacts, number) {
-        val contactNumbers = contacts.map { it.number.filter(Char::isDigit) }.toSet()
+        val contactNumbers = contacts.map { dialSearchNumberKey(it.number) }.toSet()
         records.filter { record ->
             val digits = record.searchPhoneNumber()
-            dialMatchesNumber(digits, number) && digits !in contactNumbers
-        }.distinctBy { it.searchPhoneNumber() }
+            dialMatchesNumber(digits, number) && dialSearchNumberKey(digits) !in contactNumbers
+        }.distinctBy { dialSearchNumberKey(it.searchPhoneNumber()) }
     }
     Column(modifier = Modifier.fillMaxSize()) {
         // DialtactsFragment replaces the XML's initial 70dp margin with the measured
@@ -584,19 +584,6 @@ private fun DialSearchResults(number: String, records: List<CallRecord>, allCont
         OppoDialNumberHeader(number, location, showDivider = resultsState.canScrollBackward)
         // dialpad_add_contact starts 116.33dp below the content top.
         LazyColumn(state = resultsState, modifier = Modifier.fillMaxSize()) {
-            itemsIndexed(matches) { index, record ->
-                DialSearchRow(
-                    onCall = { onDial(record.searchPhoneNumber()) },
-                    name = record.number.takeIf { it.any(Char::isLetter) },
-                    number = record.searchPhoneNumber(),
-                    location = locationFor(record.searchPhoneNumber())
-                        ?: record.description.takeUnless { it.any(Char::isDigit) },
-                    onInfo = { onInfo(record) },
-                    showDivider = index < matches.lastIndex || contacts.isNotEmpty(),
-                    query = number,
-                    recentCall = true,
-                )
-            }
             itemsIndexed(contacts) { index, contact ->
                 DialSearchRow(
                     onCall = { onDial(contact.number) },
@@ -605,7 +592,19 @@ private fun DialSearchResults(number: String, records: List<CallRecord>, allCont
                     location = locationFor(contact.number) ?: contact.location,
                     query = number,
                     onInfo = { onInfo(CallRecord(contact.number, contact.location, "联系人", CallKind.INCOMING)) },
-                    showDivider = index < contacts.lastIndex,
+                    showDivider = index < contacts.lastIndex || matches.isNotEmpty(),
+                )
+            }
+            itemsIndexed(matches) { index, record ->
+                DialSearchRow(
+                    onCall = { onDial(record.searchPhoneNumber()) },
+                    name = null,
+                    number = record.searchPhoneNumber(),
+                    location = record.homeAttribution(locationFor(record.searchPhoneNumber())),
+                    onInfo = { onInfo(record) },
+                    showDivider = index < matches.lastIndex,
+                    query = number,
+                    recentCall = true,
                 )
             }
             if (matches.isEmpty() && contacts.isEmpty()) {
@@ -652,10 +651,11 @@ private fun DialSearchRow(
                     HighlightedNumber(displayNumber, query)
                 } else {
                     HighlightedNumber(displayNumber, query, primary = true)
-                    if (recentCall) Text("最近通话", style = oppoTextStyle(14.sp, OppoSecondary))
+                    if (recentCall) Text(location.orEmpty(), style = oppoTextStyle(14.sp, OppoSecondary),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Text(location.orEmpty(), style = oppoTextStyle(14.sp, OppoSecondary),
+            Text(if (recentCall) "陌生号码" else location.orEmpty(), style = oppoTextStyle(14.sp, OppoSecondary),
                 modifier = Modifier.widthIn(max = 100.dp), maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End)
             Box(Modifier.padding(end = 6.dp).size(width = 44.dp, height = 64.dp).clickable(onClick = onInfo), contentAlignment = Alignment.Center) {
                 Image(painterResource(R.drawable.oppo_pb_dr_detail_normal), "详情", Modifier.size(24.dp))
@@ -698,22 +698,26 @@ private fun DialPadFab(modifier: Modifier = Modifier, onClick: () -> Unit) {
 @Composable
 private fun BottomNavigationBar(selectedTab: PhoneTab, onSelected: (PhoneTab) -> Unit) {
     // ContactsTabActivity uses contact_bottom_tab_height=56dp, 24dp icons and 10sp labels.
-    Row(modifier = Modifier.fillMaxWidth().height(56.dp).background(Color(0xFFFAFAFA)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        PhoneTab.entries.forEach { tab ->
-            val selected = selectedTab == tab
-            Column(
-                modifier = Modifier.weight(1f).fillMaxHeight().clickable { onSelected(tab) },
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                val drawable = when (tab) {
-                    PhoneTab.CALLS -> if (selected) R.drawable.oppo_pb_dr_dialer_selected else R.drawable.oppo_pb_dr_dialer_normal
-                    PhoneTab.CONTACTS -> if (selected) R.drawable.oppo_pb_dr_contacts_selected else R.drawable.oppo_pb_dr_contacts_normal
-                    PhoneTab.STORE -> if (selected) R.drawable.oppo_pb_dr_business_selected else R.drawable.oppo_pb_dr_business_normal
+    Column(Modifier.fillMaxWidth().background(Color(0xFFFAFAFA))) {
+        OppoDivider(start = 0.dp, end = 0.dp)
+        Spacer(Modifier.height(12.dp))
+        Row(modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            PhoneTab.entries.forEach { tab ->
+                val selected = selectedTab == tab
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxHeight().clickable { onSelected(tab) },
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    val drawable = when (tab) {
+                        PhoneTab.CALLS -> if (selected) R.drawable.oppo_pb_dr_dialer_selected else R.drawable.oppo_pb_dr_dialer_normal
+                        PhoneTab.CONTACTS -> if (selected) R.drawable.oppo_pb_dr_contacts_selected else R.drawable.oppo_pb_dr_contacts_normal
+                        PhoneTab.STORE -> if (selected) R.drawable.oppo_pb_dr_business_selected else R.drawable.oppo_pb_dr_business_normal
+                    }
+                    Image(painterResource(drawable), contentDescription = tab.label, modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.height(1.dp))
+                    Text(tab.label, fontSize = 10.sp, color = if (selected) NavigationSelected else NavigationUnselected)
                 }
-                Image(painterResource(drawable), contentDescription = tab.label, modifier = Modifier.size(24.dp))
-                Spacer(modifier = Modifier.height(1.dp))
-                Text(tab.label, fontSize = 10.sp, color = if (selected) NavigationSelected else NavigationUnselected)
             }
         }
     }

@@ -46,15 +46,26 @@ internal fun homeCallDate(record: CallRecord, today: LocalDate = LocalDate.now()
 }
 
 internal fun dialMatchesNumber(number: String, query: String): Boolean =
-    query.isNotEmpty() && number.filter { it.isDigit() || it in "+*#" }.contains(query)
+    query.isNotEmpty() && dialSearchNumberKey(number).contains(query.filter { it.isDigit() || it in "+*#" })
+
+/** Normalize common China mobile formats so +86 and local-format numbers compare equally. */
+internal fun dialSearchNumberKey(number: String): String {
+    val dialable = number.filter { it.isDigit() || it in "+*#" }
+    val digits = dialable.filter(Char::isDigit)
+    return when {
+        digits.length == 13 && digits.startsWith("86") -> digits.drop(2)
+        '*' in dialable || '#' in dialable -> dialable
+        else -> digits
+    }
+}
 
 internal fun matchingDialContacts(contacts: List<ContactMatch>, query: String): List<ContactMatch> =
-    contacts.filter { dialMatchesNumber(it.number, query) }
+    contacts.filter { dialMatchesNumber(it.number, query) }.distinctBy { dialSearchNumberKey(it.number) }
 
 internal fun CallRecord.homeAttribution(resolved: String?): String =
     resolved?.takeIf(String::isNotBlank)
         ?: listOfNotNull(attribution?.filterNot(Char::isWhitespace)?.takeIf(String::isNotBlank), operator?.trim()?.takeIf(String::isNotBlank))
             .joinToString(" ").ifBlank {
-                description.takeUnless { it.startsWith("呼") || it.startsWith("未接") || it == "拒接" }
+                description.takeUnless { it.startsWith("呼") || it.startsWith("未接") || it == "拒接" || it == "陌生号码" }
                     .orEmpty().ifBlank { "未知归属地" }
             }
