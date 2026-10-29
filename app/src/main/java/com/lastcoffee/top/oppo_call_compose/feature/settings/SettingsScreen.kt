@@ -65,6 +65,7 @@ fun SettingsScreen(
     onOpenLocations: () -> Unit,
     onOpenRingback: () -> Unit,
     onOpenAutoHangUp: () -> Unit,
+    onOpenVoiceHangup: () -> Unit,
     onOpenPromptNumbers: (CallPromptType) -> Unit,
     onCheckForUpdate: () -> Unit,
 ) {
@@ -175,6 +176,16 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("自动挂断号码", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .background(Color.White, RoundedCornerShape(20.dp))
+                    .clickable(onClick = onOpenVoiceHangup)
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("语音挂断口令", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF858585))
             }
             CallPromptType.entries.forEach { type ->

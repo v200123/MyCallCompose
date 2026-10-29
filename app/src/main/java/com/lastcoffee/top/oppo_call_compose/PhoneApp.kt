@@ -29,6 +29,7 @@ import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
 import com.lastcoffee.top.oppo_call_compose.data.PhoneAttributionStore
 import com.lastcoffee.top.oppo_call_compose.data.mobileForLookup
 import com.lastcoffee.top.oppo_call_compose.data.RingbackBadgeStore
+import com.lastcoffee.top.oppo_call_compose.data.VoiceHangupSettingsStore
 import com.lastcoffee.top.oppo_call_compose.feature.call.CallDetailScreen
 import com.lastcoffee.top.oppo_call_compose.feature.call.InCallScreen
 import com.lastcoffee.top.oppo_call_compose.feature.contacts.ContactsScreen
@@ -47,6 +48,7 @@ import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackBadgeEditor
 import com.lastcoffee.top.oppo_call_compose.feature.settings.RingbackBadgeBindingsScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.AutoHangUpScreen
 import com.lastcoffee.top.oppo_call_compose.feature.settings.CallPromptNumbersScreen
+import com.lastcoffee.top.oppo_call_compose.feature.settings.VoiceHangupSettingsScreen
 import com.lastcoffee.top.oppo_call_compose.data.CallPromptType
 import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
@@ -63,6 +65,7 @@ private data object SettingsRoute
 private data object LocationsRoute
 private data object RingbackSettingsRoute
 private data object AutoHangUpRoute
+private data object VoiceHangupSettingsRoute
 private data class CallPromptNumbersRoute(val type: CallPromptType)
 private data object RingbackBadgeRulesRoute
 private data class RingbackBadgeEditorRoute(val ruleId: String)
@@ -212,6 +215,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                         onOpenLocations = { backStack.add(LocationsRoute) },
                         onOpenRingback = { backStack.add(RingbackSettingsRoute) },
                         onOpenAutoHangUp = { backStack.add(AutoHangUpRoute) },
+                        onOpenVoiceHangup = { backStack.add(VoiceHangupSettingsRoute) },
                         onOpenPromptNumbers = { backStack.add(CallPromptNumbersRoute(it)) },
                         onCheckForUpdate = onCheckForUpdate,
                     )
@@ -219,6 +223,9 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                 entry<AutoHangUpRoute> {
                     AutoHangUpScreen(extras, extrasStore, numberPools,
                         onOpenPools = { backStack.add(NumberPoolsRoute) }, onBack = { backStack.removeLastOrNull() })
+                }
+                entry<VoiceHangupSettingsRoute> {
+                    VoiceHangupSettingsScreen(VoiceHangupSettingsStore(context)) { backStack.removeLastOrNull() }
                 }
                 entry<CallPromptNumbersRoute> { route ->
                     CallPromptNumbersScreen(route.type, extras, extrasStore, callConfiguration,

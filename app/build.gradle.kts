@@ -52,6 +52,7 @@ dependencies {
     implementation("org.slf4j:slf4j-api:1.7.36")
     runtimeOnly("org.slf4j:slf4j-nop:1.7.36")
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
+    implementation("com.belerweb:pinyin4j:2.5.1")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
