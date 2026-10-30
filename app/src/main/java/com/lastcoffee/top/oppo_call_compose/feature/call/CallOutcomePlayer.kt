@@ -47,6 +47,7 @@ internal class CallOutcomePlayer(
                         return@post
                     }
                     val engine = speech ?: return@post
+                    engine.setAudioAttributes(callAudioAttributes)
                     val language = engine.setLanguage(Locale.SIMPLIFIED_CHINESE)
                     if (language == TextToSpeech.LANG_MISSING_DATA || language == TextToSpeech.LANG_NOT_SUPPORTED) {
                         playFallback(cycles)
@@ -88,7 +89,7 @@ internal class CallOutcomePlayer(
 
     private fun playTone(toneId: Int, durationMs: Int, cycles: Int) {
         handler.removeCallbacks(timeout)
-        val generator = runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 80) }.getOrNull()
+        val generator = runCatching { ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80) }.getOrNull()
         tone = generator
         if (generator == null) {
             handler.postDelayed(timeout, durationMs.toLong())

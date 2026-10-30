@@ -1,5 +1,7 @@
 package com.lastcoffee.top.oppo_call_compose.feature.call
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -10,19 +12,27 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.lastcoffee.top.oppo_call_compose.data.BadgeAsset
+import com.lastcoffee.top.oppo_call_compose.data.BadgeAnimationType
 import com.lastcoffee.top.oppo_call_compose.data.BadgePlacement
 import com.lastcoffee.top.oppo_call_compose.data.BadgeRule
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /** The same normalized canvas is used by the editor and during video playback. */
 @Composable
@@ -32,6 +42,7 @@ fun RingbackBadgeCanvas(
     selected: BadgeAsset? = null,
     onSelect: ((BadgeAsset) -> Unit)? = null,
     onChange: ((BadgePlacement) -> Unit)? = null,
+    animated: Boolean = false,
 ) {
     BoxWithConstraints(modifier.clipToBounds()) {
         val canvasWidth = maxWidth.value
@@ -59,8 +70,60 @@ fun RingbackBadgeCanvas(
                         }
                     } else Modifier)
                     .then(if (onSelect != null) Modifier.clickable { onSelect(asset) } else Modifier)
-                Image(painterResource(asset.drawable), contentDescription = asset.title, modifier = imageModifier)
+                BadgeImage(placement, canvasWidth, canvasHeight, animated, imageModifier)
             }
         }
     }
+}
+
+@Composable
+private fun BadgeImage(placement: BadgePlacement, canvasWidth: Float, canvasHeight: Float, animated: Boolean, modifier: Modifier) {
+    val scale = remember(placement.asset) { Animatable(1f) }
+    val x = remember(placement.asset) { Animatable(0f) }
+    val y = remember(placement.asset) { Animatable(0f) }
+    val rotation = remember(placement.asset) { Animatable(0f) }
+    val density = LocalDensity.current
+    LaunchedEffect(placement.asset, placement.animations, placement.restoreAfterAnimation, animated) {
+        scale.snapTo(1f)
+        x.snapTo(0f)
+        y.snapTo(0f)
+        rotation.snapTo(0f)
+        if (!animated || placement.animations.isEmpty()) return@LaunchedEffect
+        while (isActive) {
+            placement.animations.forEach { step ->
+                delay((step.delaySeconds * 1000).toLong())
+                val duration = (step.durationSeconds * 1000).toInt()
+                when (step.type) {
+                    BadgeAnimationType.SCALE -> scale.animateTo(step.targetScale, tween(duration))
+                    BadgeAnimationType.TRANSLATE -> coroutineScope {
+                        launch { x.animateTo(step.xPercent, tween(duration)) }
+                        launch { y.animateTo(step.yPercent, tween(duration)) }
+                    }
+                    BadgeAnimationType.ROTATE -> rotation.animateTo(step.targetRotation, tween(duration))
+                }
+            }
+            if (!placement.restoreAfterAnimation) break
+            // Restore the original placement before repeating the queue.
+            coroutineScope {
+                launch { scale.animateTo(1f, tween(300)) }
+                launch { x.animateTo(0f, tween(300)) }
+                launch { y.animateTo(0f, tween(300)) }
+                launch {
+                    if (rotation.value == 360f || rotation.value == -360f) rotation.snapTo(0f)
+                    else rotation.animateTo(0f, tween(300))
+                }
+            }
+        }
+    }
+    Image(
+        painterResource(placement.asset.drawable),
+        contentDescription = placement.asset.title,
+        modifier = modifier.graphicsLayer {
+            scaleX = scale.value
+            scaleY = scale.value
+            rotationZ = rotation.value
+            translationX = with(density) { (x.value * canvasWidth).dp.toPx() }
+            translationY = with(density) { (y.value * canvasHeight).dp.toPx() }
+        },
+    )
 }
