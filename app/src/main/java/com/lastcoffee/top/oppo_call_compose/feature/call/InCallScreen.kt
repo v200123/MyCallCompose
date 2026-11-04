@@ -207,7 +207,8 @@ internal fun InCallScreen(
     val randomRingbackId = remember(number, ringbackVideos) { ringbackVideos.randomOrNull()?.id }
     val currentMedia = remember(activeStatusId, activeRule.mediaEntryId, activeRule.playSoundOnce, mediaForMode, mediaEntries, extras, number, randomRingbackId, callState, promptRuleActive) {
         val selectedMedia = mediaEntries.firstOrNull {
-            it.id == activeRule.mediaEntryId && it.mode.isCallMode && it.mode.acceptsMimeType(it.mimeType) &&
+            it.id == activeRule.mediaEntryId && (it.mode.isCallMode ||
+                    (activeRule.stage == CallStage.OUTCOME && it.mode == CallAudioMode.STATUS_SOUND)) && it.mode.acceptsMimeType(it.mimeType) &&
                 File(it.filePath).isFile && (!extras.blocksRingback(number) || !it.mimeType.startsWith("video/"))
         }
         if (activeRule.playSoundOnce) null

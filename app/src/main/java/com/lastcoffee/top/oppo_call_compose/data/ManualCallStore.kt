@@ -1,6 +1,9 @@
 package com.lastcoffee.top.oppo_call_compose.data
 
 import android.content.Context
+import java.io.File
+import com.lastcoffee.top.oppo_call_compose.R
+import com.lastcoffee.top.oppo_call_compose.model.withDefaultStatusAudio
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -45,6 +48,27 @@ class ManualCallStore internal constructor(context: Context, private val databas
     constructor(context: Context) : this(context, openManualCallDatabase(context.applicationContext))
 
     private val appContext = context.applicationContext
+    private val bundledMedia by lazy {
+        val directory = File(appContext.filesDir, "bundled_status_audio").apply { mkdirs() }
+        listOf(
+            Triple("busy", "通话中", R.raw.default_busy),
+            Triple("no_answer", "暂时无人接听", R.raw.default_no_answer),
+            Triple("powered_off", "关机", R.raw.audio_power_off),
+            Triple("voicemail", "语音留言", R.raw.default_voicemail),
+        ).map { (key, title, resource) ->
+            val extension = if (key == "voicemail") "m4a" else "mp3"
+            val file = File(directory, "$key.$extension")
+            if (!file.isFile || file.length() == 0L) {
+                appContext.resources.openRawResource(resource).use { input ->
+                    file.outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+            CallMediaEntry("builtin_$key", CallAudioMode.STATUS_SOUND, title, file.absolutePath,
+                if (extension == "m4a") "audio/mp4" else "audio/mpeg")
+        }
+    }
+    private fun includeBundledMedia(entries: List<CallMediaEntry>) =
+        entries.filterNot { entry -> bundledMedia.any { it.id == entry.id } } + bundledMedia
     private val dao = database.manualCallDao()
     private val importMutex = Mutex()
     private val configurationMutex = Mutex()
@@ -52,14 +76,14 @@ class ManualCallStore internal constructor(context: Context, private val databas
     val calls: Flow<List<ManualCall>> = dao.observeAll().map { rows -> rows.map { it.toManualCall() } }
     val hiddenDemoIndexes: Flow<List<Int>> = dao.observeHiddenDemoIndexes()
     val callConfiguration: Flow<CallFlowConfiguration> = dao.observeCallConfiguration().map { it?.content?.let { raw -> decodeConfiguration(raw) } ?: CallFlowConfiguration() }
-    val mediaEntries: Flow<List<CallMediaEntry>> = dao.observeMediaEntries().map { rows -> rows.map { it.toCallMediaEntry() } }
+    val mediaEntries: Flow<List<CallMediaEntry>> = dao.observeMediaEntries().map { rows -> includeBundledMedia(rows.map { it.toCallMediaEntry() }) }
     val numberPools: Flow<List<CallNumberPoolEntity>> = dao.observeNumberPools()
 
     suspend fun exportTransferState(): CallTransferState = database.withTransaction {
         CallTransferState(
             dao.getCallConfiguration()?.content?.let { encodeConfiguration(decodeConfiguration(it)) }
                 ?: encodeConfiguration(CallFlowConfiguration().withProgrammedCallFlow()),
-            dao.getAllMediaEntries().map { it.toCallMediaEntry() },
+            includeBundledMedia(dao.getAllMediaEntries().map { it.toCallMediaEntry() }),
         )
     }
 
@@ -366,7 +390,7 @@ private fun decodeStatuses(statusesJson: JSONArray): List<CallStatusRule> {
                 callerNumberStyle = item.optJSONObject("callerNumberStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 locationTextStyle = item.optJSONObject("locationTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 statusTextStyle = item.optJSONObject("statusTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
-            ).withVisibleCallButtons())
+            ).withVisibleCallButtons().withDefaultStatusAudio())
         }
     }.ifEmpty { defaultCallStatuses() }
     return statuses

@@ -197,8 +197,15 @@ fun defaultCallStatuses(): List<CallStatusRule> = listOf(
     CallStatusRule("empty_number", "空号", CallStage.OUTCOME, 10, "disconnecting", outcome = "EMPTY_NUMBER"),
     CallStatusRule("powered_off", "对方已关机", CallStage.OUTCOME, 10, "disconnecting", outcome = "POWERED_OFF"),
     CallStatusRule("unreachable", "无法接通", CallStage.OUTCOME, 10, "disconnecting", outcome = "UNREACHABLE"),
+    CallStatusRule("voicemail", "语音留言", CallStage.OUTCOME, 0, "disconnecting", audioPlayCount = 1),
     CallStatusRule("active", "通话中", CallStage.ACTIVE),
     CallStatusRule("hold", "保持", CallStage.HOLD),
     CallStatusRule("disconnecting", "正在挂断", CallStage.DISCONNECTING, 1, "disconnected"),
     CallStatusRule("disconnected", "已挂断", CallStage.DISCONNECTED, 1),
-)
+).map { it.withDefaultStatusAudio() }
+
+fun CallStatusRule.withDefaultStatusAudio(): CallStatusRule {
+    if (id !in setOf("busy", "no_answer", "powered_off", "voicemail")) return this
+    return if (mediaEntryId == null && soundEntryId == null && !soundMuted && !playSoundOnce)
+        copy(mediaEntryId = "builtin_$id") else this
+}
