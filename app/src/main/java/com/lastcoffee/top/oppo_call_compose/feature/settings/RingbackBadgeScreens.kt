@@ -15,12 +15,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,7 +36,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import com.lastcoffee.top.oppo_call_compose.data.BadgeAsset
+import com.lastcoffee.top.oppo_call_compose.data.BadgeAnimationStep
+import com.lastcoffee.top.oppo_call_compose.data.BadgeAnimationType
 import com.lastcoffee.top.oppo_call_compose.data.BadgePlacement
 import com.lastcoffee.top.oppo_call_compose.data.BadgeRule
 import com.lastcoffee.top.oppo_call_compose.data.BadgeSettings
@@ -105,23 +112,33 @@ private fun RuleNameDialog(title: String, initial: String, onDismiss: () -> Unit
 fun RingbackBadgeEditorScreen(rule: BadgeRule, store: RingbackBadgeStore, onBack: () -> Unit) {
     var working by remember(rule.id) { mutableStateOf(rule) }
     var selected by remember(rule.id) { mutableStateOf<BadgeAsset?>(null) }
+    var animationQueueOpen by remember(rule.id) { mutableStateOf(false) }
+    var previewAnimations by remember(rule.id) { mutableStateOf(false) }
     fun saveAndBack() { store.saveRule(working); onBack() }
     BackHandler { saveAndBack() }
     ExtrasFrame(rule.name, ::saveAndBack) {
-        Text("点击底部图标添加；拖动调整位置，双指缩放。返回时保存。", modifier = Modifier.padding(12.dp), color = Color.Gray)
+        Text("点击底部图标添加；拖动调整位置，双指缩放。动画按队列顺序播放。返回时保存。", modifier = Modifier.padding(12.dp), color = Color.Gray)
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("当前选中：${selected?.title ?: "未选中"}", modifier = Modifier.weight(1f))
+            TextButton(onClick = { animationQueueOpen = true }, enabled = selected != null) { Text("动画队列") }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = {
                 working = working.copy(placements = working.placements.filterNot { it.asset == selected })
                 selected = null
             }, enabled = selected != null) { Text("删除选中") }
             TextButton(onClick = { working = working.copy(placements = emptyList()); selected = null }, enabled = working.placements.isNotEmpty()) { Text("清空") }
+            TextButton(onClick = { previewAnimations = !previewAnimations }) {
+                Text(if (previewAnimations) "停止预览" else "预览动画")
+            }
         }
         RingbackBadgeCanvas(
             rule = working,
             modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp, vertical = 8.dp).background(Color.Black),
             selected = selected,
+            animated = previewAnimations,
             onSelect = { asset ->
+                if (previewAnimations) return@RingbackBadgeCanvas
                 if (selected != asset) {
                     selected = asset
                     val top = (working.placements.maxOfOrNull { it.zIndex } ?: 0) + 1
@@ -129,6 +146,7 @@ fun RingbackBadgeEditorScreen(rule: BadgeRule, store: RingbackBadgeStore, onBack
                 }
             },
             onChange = { updated ->
+                if (previewAnimations) return@RingbackBadgeCanvas
                 val top = (working.placements.maxOfOrNull { it.zIndex } ?: 0) + 1
                 val moved = if (selected == updated.asset) updated else updated.copy(zIndex = top)
                 working = working.copy(placements = working.placements.map { if (it.asset == moved.asset) moved else it })
@@ -154,6 +172,131 @@ fun RingbackBadgeEditorScreen(rule: BadgeRule, store: RingbackBadgeStore, onBack
             }
         }
     }
+    if (animationQueueOpen) {
+        val placement = working.placements.firstOrNull { it.asset == selected }
+        if (placement == null) animationQueueOpen = false else AnimationQueueDialog(
+            placement = placement,
+            onDismiss = { animationQueueOpen = false },
+            onChange = { updated ->
+                working = working.copy(placements = working.placements.map {
+                    if (it.asset == updated.asset) updated else it
+                })
+            },
+        )
+    }
+}
+
+@Composable
+private fun AnimationQueueDialog(placement: BadgePlacement, onDismiss: () -> Unit, onChange: (BadgePlacement) -> Unit) {
+    var editingIndex by remember(placement.asset) { mutableStateOf<Int?>(null) }
+    val steps = placement.animations
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${placement.asset.title} · 动画队列") },
+        text = {
+            Column {
+                Text("每步先等待，再执行动画。位移相对图标原位。", color = Color.Gray)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("结束后恢复原位", modifier = Modifier.weight(1f))
+                    Switch(checked = placement.restoreAfterAnimation,
+                        onCheckedChange = { onChange(placement.copy(restoreAfterAnimation = it)) })
+                }
+                Text(if (placement.restoreAfterAnimation) "恢复后循环播放" else "播放一次，停留在最后状态", color = Color.Gray)
+                if (steps.isEmpty()) Text("还没有动画步骤", modifier = Modifier.padding(vertical = 12.dp))
+                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    items(steps.size) { index ->
+                        val step = steps[index]
+                        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            val action = when (step.type) {
+                                BadgeAnimationType.SCALE -> "缩放至 ${step.targetScale} 倍"
+                                BadgeAnimationType.TRANSLATE -> "平移 X ${step.xPercent * 100}% / Y ${step.yPercent * 100}%"
+                                BadgeAnimationType.ROTATE -> "旋转至 ${step.targetRotation}°"
+                            }
+                            Text("${index + 1}. 等待 ${step.delaySeconds} 秒 · $action · ${step.durationSeconds} 秒")
+                            Row {
+                                TextButton(onClick = { editingIndex = index }) { Text("编辑") }
+                                TextButton(onClick = {
+                                    onChange(placement.copy(animations = steps.toMutableList().apply { add(index - 1, removeAt(index)) }))
+                                }, enabled = index > 0) { Text("上移") }
+                                TextButton(onClick = {
+                                    onChange(placement.copy(animations = steps.toMutableList().apply { add(index + 1, removeAt(index)) }))
+                                }, enabled = index < steps.lastIndex) { Text("下移") }
+                                TextButton(onClick = { onChange(placement.copy(animations = steps.filterIndexed { i, _ -> i != index })) }) { Text("删除") }
+                            }
+                        }
+                    }
+                }
+                TextButton(onClick = { editingIndex = steps.size }, enabled = steps.size < 12) { Text("添加步骤（最多 12 步）") }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } },
+    )
+    editingIndex?.let { index ->
+        AnimationStepDialog(
+            initial = steps.getOrNull(index),
+            onDismiss = { editingIndex = null },
+            onSave = { step ->
+                if (index < steps.size) onChange(placement.copy(animations = steps.toMutableList().apply { this[index] = step }))
+                else onChange(placement.copy(animations = steps + step))
+                editingIndex = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun AnimationStepDialog(initial: BadgeAnimationStep?, onDismiss: () -> Unit, onSave: (BadgeAnimationStep) -> Unit) {
+    var type by remember(initial) { mutableStateOf(initial?.type ?: BadgeAnimationType.SCALE) }
+    var delay by remember(initial) { mutableStateOf((initial?.delaySeconds ?: 1f).toString()) }
+    var duration by remember(initial) { mutableStateOf((initial?.durationSeconds ?: 0.5f).toString()) }
+    var scale by remember(initial) { mutableStateOf((initial?.targetScale ?: 1.2f).toString()) }
+    var x by remember(initial) { mutableStateOf(((initial?.xPercent ?: 0f) * 100).toString()) }
+    var y by remember(initial) { mutableStateOf(((initial?.yPercent ?: 0f) * 100).toString()) }
+    var rotation by remember(initial) { mutableStateOf((initial?.targetRotation ?: 90f).toString()) }
+    val delayValue = delay.toFloatOrNull()?.takeIf { it.isFinite() && it in 0f..60f }
+    val durationValue = duration.toFloatOrNull()?.takeIf { it.isFinite() && it in 0.1f..10f }
+    val scaleValue = scale.toFloatOrNull()?.takeIf { it.isFinite() && it in 0.2f..2f }
+    val xValue = x.toFloatOrNull()?.takeIf { it.isFinite() && it in -50f..50f }
+    val yValue = y.toFloatOrNull()?.takeIf { it.isFinite() && it in -50f..50f }
+    val rotationValue = rotation.toFloatOrNull()?.takeIf { it.isFinite() && it in -360f..360f }
+    val valid = delayValue != null && durationValue != null &&
+        when (type) {
+            BadgeAnimationType.SCALE -> scaleValue != null
+            BadgeAnimationType.TRANSLATE -> xValue != null && yValue != null
+            BadgeAnimationType.ROTATE -> rotationValue != null
+        }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial == null) "添加动画步骤" else "编辑动画步骤") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Row {
+                    TextButton(onClick = { type = BadgeAnimationType.SCALE }) { Text(if (type == BadgeAnimationType.SCALE) "✓ 缩放" else "缩放") }
+                    TextButton(onClick = { type = BadgeAnimationType.TRANSLATE }) { Text(if (type == BadgeAnimationType.TRANSLATE) "✓ 平移" else "平移") }
+                    TextButton(onClick = { type = BadgeAnimationType.ROTATE }) { Text(if (type == BadgeAnimationType.ROTATE) "✓ 旋转" else "旋转") }
+                }
+                OutlinedTextField(delay, { delay = it }, label = { Text("执行前等待（秒，0–60）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                OutlinedTextField(duration, { duration = it }, label = { Text("动画时长（秒，0.1–10）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                when (type) {
+                    BadgeAnimationType.SCALE -> OutlinedTextField(scale, { scale = it }, label = { Text("目标倍数（0.2–2）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                    BadgeAnimationType.TRANSLATE -> {
+                        Text("位移按画布宽高的百分比计算，可填负数", color = Color.Gray)
+                        OutlinedTextField(x, { x = it }, label = { Text("水平位移（%，-50–50）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                        OutlinedTextField(y, { y = it }, label = { Text("垂直位移（%，-50–50）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                    }
+                    BadgeAnimationType.ROTATE -> {
+                        Text("正数顺时针，负数逆时针", color = Color.Gray)
+                        OutlinedTextField(rotation, { rotation = it }, label = { Text("目标角度（°，-360–360）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = {
+            onSave(BadgeAnimationStep(type, delayValue!!, durationValue!!, scaleValue ?: 1.2f,
+                (xValue ?: 0f) / 100f, (yValue ?: 0f) / 100f, rotationValue ?: 90f))
+        }, enabled = valid) { Text("保存") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable

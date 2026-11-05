@@ -173,6 +173,7 @@ internal fun InCallScreen(
     val context = LocalContext.current
     var ringbackVideoError by remember { mutableStateOf(false) }
     val isPreview = LocalInspectionMode.current
+    val audioRoute = remember(context, isPreview) { if (isPreview) null else CallAudioRoute(context) }
     val hangupPhrase = remember(context) { runCatching { voiceHangupPhrase(context) }.getOrDefault("语音口令") }
     var microphoneGranted by remember {
         mutableStateOf(isPreview || ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
@@ -265,7 +266,8 @@ internal fun InCallScreen(
             ?: defaultButtons(activeRule.stage).first { it.id == id }
         if (!rule.enabled) return
         val targetId = rule.targetStatusId
-        if (targetId != null) transitionToStatus(targetId) else defaultAction()
+        if (id == CallButtonId.SPEAKER) defaultAction()
+        if (targetId != null) transitionToStatus(targetId) else if (id != CallButtonId.SPEAKER) defaultAction()
     }
 
     fun unavailableAction(label: String) {
@@ -347,6 +349,19 @@ internal fun InCallScreen(
         onDispose { lifecycleOwner?.lifecycle?.removeObserver(observer) }
     }
 
+    DisposableEffect(audioRoute, isResumed, callState == CallSessionState.DISCONNECTED) {
+        if (audioRoute != null && isResumed && callState != CallSessionState.DISCONNECTED) {
+            val activity = context as? Activity
+            val previousVolumeStream = activity?.volumeControlStream
+            activity?.volumeControlStream = AudioManager.STREAM_VOICE_CALL
+            audioRoute.start(speakerOn) { speakerOn = it }
+            onDispose {
+                audioRoute.stop()
+                if (previousVolumeStream != null) activity?.volumeControlStream = previousVolumeStream
+            }
+        } else onDispose { }
+    }
+
     DisposableEffect(stepRevision, microphoneGranted, isResumed) {
         if (!isPreview && callState == CallSessionState.ACTIVE && microphoneGranted && isResumed) {
             voiceFailed = false
@@ -392,7 +407,7 @@ internal fun InCallScreen(
                 CallPromptType.BUSY -> R.raw.audio_user_busy
                 CallPromptType.UNREACHABLE -> R.raw.audio_busy
             }
-            val player = MediaPlayer.create(context, rawId)
+            val player = MediaPlayer.create(context, rawId, callAudioAttributes, 0)
             if (player == null) {
                 onDispose { }
             } else {
@@ -440,7 +455,7 @@ internal fun InCallScreen(
             val playCount = activeRule.audioPlayCount.coerceIn(0, 99)
             var completedPlays = 0
             runCatching {
-                player.setAudioStreamType(AudioManager.STREAM_MUSIC)
+                player.setAudioAttributes(callAudioAttributes)
                 player.setDataSource(media.filePath)
                 player.isLooping = playCount == 0
                 if (playCount > 0) player.setOnCompletionListener {
@@ -491,7 +506,7 @@ internal fun InCallScreen(
             }
         }
         runCatching {
-            player.setAudioStreamType(AudioManager.STREAM_MUSIC)
+            player.setAudioAttributes(callAudioAttributes)
             player.setDataSource(sound.filePath)
             player.isLooping = false
             player.setOnCompletionListener { finish(); onStepAudioFinished(stepRevision) }
@@ -536,7 +551,7 @@ internal fun InCallScreen(
                     onStarted = { if (executor.isCurrent(stepRevision) && isOutgoing) onRingbackStarted(number) },
                 )
             }
-            if (isOutgoing) RingbackBadgeCanvas(badgeRule, modifier = Modifier.fillMaxSize().padding(top = 60.dp, bottom = 100.dp))
+            if (isOutgoing) RingbackBadgeCanvas(badgeRule, modifier = Modifier.fillMaxSize().padding(top = 60.dp, bottom = 100.dp), animated = true)
             Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.52f)))
         }
         Column(
@@ -672,7 +687,12 @@ internal fun InCallScreen(
                                                             executor.statuses.firstOrNull { it.stage == targetStage }?.let { transitionToStatus(it.id) }
                                                         }
                                                         CallButtonId.MUTE -> muted = !muted
-                                                        CallButtonId.SPEAKER -> speakerOn = !speakerOn
+                                                        CallButtonId.SPEAKER -> {
+                                                            if (isPreview) speakerOn = !speakerOn
+                                                            else if (audioRoute?.setSpeakerEnabled(!speakerOn) != true) {
+                                                                Toast.makeText(context, "音频输出切换失败", Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        }
                                                         CallButtonId.KEYPAD -> dialpadOpen = !dialpadOpen
                                                         else -> unavailableAction(id.title)
                                                     }
@@ -764,6 +784,7 @@ private fun RingbackVideo(uri: Uri, playCount: Int, onError: () -> Unit, onStart
         factory = { context ->
             VideoView(context).apply {
                 var completedPlays = 0
+                setAudioAttributes(callAudioAttributes)
                 setOnPreparedListener { player ->
                     player.isLooping = playCount == 0
                     start()
@@ -810,7 +831,7 @@ private fun CallVisualStyle.textColor(fallback: Color): Color = textColorArgb?.l
 
 @Composable
 private fun InCallDtmfPad(digits: String, onDigit: (String) -> Unit, toneEnabled: Boolean) {
-    val playTone = rememberDialpadTone(toneEnabled)
+    val playTone = rememberDialpadTone(toneEnabled, inCall = true)
     val keys = listOf("1" to "", "2" to "ABC", "3" to "DEF", "4" to "GHI", "5" to "JKL", "6" to "MNO", "7" to "PQRS", "8" to "TUV", "9" to "WXYZ", "*" to "", "0" to "+", "#" to "")
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(digits, color = Color.White, fontSize = 40.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,

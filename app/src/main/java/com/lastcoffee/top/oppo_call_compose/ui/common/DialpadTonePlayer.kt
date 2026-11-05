@@ -19,9 +19,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-/** Same stream, volume and duration as bohao's TonePlayer: local DTMF feedback only. */
-internal class DialpadTonePlayer(context: Context) {
+/** Local DTMF feedback; the in-call pad follows the communication output route. */
+internal class DialpadTonePlayer(context: Context, private val inCall: Boolean = false) {
     private val audioManager = context.applicationContext.getSystemService(AudioManager::class.java)
+    private val stream = if (inCall) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_DTMF
     private var generator: ToneGenerator? = null
 
     fun play(key: String) {
@@ -40,13 +41,13 @@ internal class DialpadTonePlayer(context: Context) {
             "#" -> ToneGenerator.TONE_DTMF_P
             else -> return
         }
-        if (audioManager.ringerMode != AudioManager.RINGER_MODE_NORMAL ||
-            audioManager.getStreamVolume(AudioManager.STREAM_DTMF) == 0) {
+        if ((!inCall && audioManager.ringerMode != AudioManager.RINGER_MODE_NORMAL) ||
+            audioManager.getStreamVolume(stream) == 0) {
             if (BuildConfig.DEBUG) Log.d("DialpadTone", "blocked by ringer mode or DTMF volume")
             return
         }
         runCatching {
-            val current = generator ?: ToneGenerator(AudioManager.STREAM_DTMF, 80).also { generator = it }
+            val current = generator ?: ToneGenerator(stream, 80).also { generator = it }
             current.stopTone()
             val started = current.startTone(tone, 150)
             if (BuildConfig.DEBUG) Log.d("DialpadTone", "startTone=$started")
@@ -63,11 +64,11 @@ internal class DialpadTonePlayer(context: Context) {
 }
 
 @Composable
-internal fun rememberDialpadTone(enabled: Boolean): (String) -> Unit {
+internal fun rememberDialpadTone(enabled: Boolean, inCall: Boolean = false): (String) -> Unit {
     val context = LocalContext.current
     val preview = LocalInspectionMode.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val player = remember(context, preview) { if (preview) null else DialpadTonePlayer(context) }
+    val player = remember(context, preview, inCall) { if (preview) null else DialpadTonePlayer(context, inCall) }
     DisposableEffect(player, lifecycleOwner, enabled) {
         if (!enabled) player?.release()
         val observer = LifecycleEventObserver { _, event ->

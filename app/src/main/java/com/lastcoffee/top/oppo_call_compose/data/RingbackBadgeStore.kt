@@ -23,6 +23,30 @@ data class BadgePlacement(
     val yPercent: Float = 0.5f,
     val scale: Float = 1f,
     val zIndex: Int = 0,
+    val animations: List<BadgeAnimationStep> = emptyList(),
+    val restoreAfterAnimation: Boolean = true,
+)
+
+enum class BadgeAnimationType { SCALE, TRANSLATE, ROTATE }
+
+/** Each step waits, animates to its target, then hands control to the next step. */
+data class BadgeAnimationStep(
+    val type: BadgeAnimationType,
+    val delaySeconds: Float = 1f,
+    val durationSeconds: Float = 0.5f,
+    val targetScale: Float = 1.2f,
+    val xPercent: Float = 0f,
+    val yPercent: Float = 0f,
+    val targetRotation: Float = 90f,
+)
+
+private fun BadgeAnimationStep.sanitized() = copy(
+    delaySeconds = delaySeconds.takeIf(Float::isFinite)?.coerceIn(0f, 60f) ?: 1f,
+    durationSeconds = durationSeconds.takeIf(Float::isFinite)?.coerceIn(0.1f, 10f) ?: 0.5f,
+    targetScale = targetScale.takeIf(Float::isFinite)?.coerceIn(0.2f, 2f) ?: 1.2f,
+    xPercent = xPercent.takeIf(Float::isFinite)?.coerceIn(-0.5f, 0.5f) ?: 0f,
+    yPercent = yPercent.takeIf(Float::isFinite)?.coerceIn(-0.5f, 0.5f) ?: 0f,
+    targetRotation = targetRotation.takeIf(Float::isFinite)?.coerceIn(-360f, 360f) ?: 90f,
 )
 
 data class BadgeRule(
@@ -69,6 +93,7 @@ class RingbackBadgeStore(context: Context) {
                 xPercent = placement.xPercent.coerceIn(0f, 1f),
                 yPercent = placement.yPercent.coerceIn(0f, 1f),
                 scale = placement.scale.coerceIn(0.2f, 2f),
+                animations = placement.animations.take(12).map(BadgeAnimationStep::sanitized),
             ) },
         ) else it })
     }
@@ -112,6 +137,18 @@ class RingbackBadgeStore(context: Context) {
                         put("y", placement.yPercent.toDouble())
                         put("scale", placement.scale.toDouble())
                         put("z", placement.zIndex)
+                        put("restoreAfterAnimation", placement.restoreAfterAnimation)
+                        put("animations", JSONArray().apply { placement.animations.forEach { step ->
+                            put(JSONObject().apply {
+                                put("type", step.type.name)
+                                put("delay", step.delaySeconds.toDouble())
+                                put("duration", step.durationSeconds.toDouble())
+                                put("targetScale", step.targetScale.toDouble())
+                                put("x", step.xPercent.toDouble())
+                                put("y", step.yPercent.toDouble())
+                                put("targetRotation", step.targetRotation.toDouble())
+                            })
+                        } })
                     })
                 } })
             })
@@ -129,9 +166,22 @@ class RingbackBadgeStore(context: Context) {
                     (0 until images.length()).mapNotNull { imageIndex ->
                         val image = images.optJSONObject(imageIndex) ?: return@mapNotNull null
                         val asset = BadgeAsset.entries.firstOrNull { it.name == image.optString("asset") } ?: return@mapNotNull null
+                        val animations = image.optJSONArray("animations")?.let { steps ->
+                            (0 until minOf(steps.length(), 12)).mapNotNull { stepIndex ->
+                                val step = steps.optJSONObject(stepIndex) ?: return@mapNotNull null
+                                val type = BadgeAnimationType.entries.firstOrNull { it.name == step.optString("type") }
+                                    ?: return@mapNotNull null
+                                BadgeAnimationStep(type, step.optDouble("delay", 1.0).toFloat(),
+                                    step.optDouble("duration", 0.5).toFloat(),
+                                    step.optDouble("targetScale", 1.2).toFloat(),
+                                    step.optDouble("x", 0.0).toFloat(), step.optDouble("y", 0.0).toFloat(),
+                                    step.optDouble("targetRotation", 90.0).toFloat()).sanitized()
+                            }
+                        }.orEmpty()
                         BadgePlacement(asset, image.optDouble("x", 0.5).toFloat().coerceIn(0f, 1f),
                             image.optDouble("y", 0.5).toFloat().coerceIn(0f, 1f),
-                            image.optDouble("scale", 1.0).toFloat().coerceIn(0.2f, 2f), image.optInt("z"))
+                            image.optDouble("scale", 1.0).toFloat().coerceIn(0.2f, 2f), image.optInt("z"),
+                            animations, image.optBoolean("restoreAfterAnimation", true))
                     }
                 }.orEmpty()
                 BadgeRule(id, item.optString("name", "规则"), placements.distinctBy { it.asset }, item.optBoolean("isPreset"))
