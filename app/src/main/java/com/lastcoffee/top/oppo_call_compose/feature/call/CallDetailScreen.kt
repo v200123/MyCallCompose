@@ -77,6 +77,7 @@ internal fun CallDetailScreen(
     onEditNumber: (String) -> Unit = {},
     onDelete: suspend (CallRecord) -> Boolean = { false },
     fromContact: Boolean = false,
+    onOpenRecording: ((String) -> Unit)? = null,
 ) {
     val number = record.phoneNumber(contacts)
     val contact = remember(record, contacts) {
@@ -182,7 +183,7 @@ internal fun CallDetailScreen(
                         }
                     }
                 }
-                item { HistoryCard(if (showAllHistory) history else history.take(3)) }
+                item { HistoryCard(if (showAllHistory) history else history.take(3), onOpenRecording) }
                 item { Spacer(Modifier.height(16.dp)) }
             }
             if (!showAllHistory && !isEmergency && contact == null) {
@@ -234,7 +235,7 @@ private fun DetailAction(label: String, drawable: Int, modifier: Modifier, enabl
 }
 
 @Composable
-private fun HistoryCard(records: List<CallRecord>) {
+private fun HistoryCard(records: List<CallRecord>, onOpenRecording: ((String) -> Unit)?) {
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp).clip(RoundedCornerShape(12.dp))
             .background(Color.White).padding(vertical = 2.dp),
@@ -243,7 +244,7 @@ private fun HistoryCard(records: List<CallRecord>) {
             Text("暂无通话记录", Modifier.padding(16.dp), style = oppoTextStyle(14.sp, OppoSecondary))
         } else {
             records.forEachIndexed { index, entry ->
-                CallHistoryItem(entry)
+                CallHistoryItem(entry, onOpenRecording)
                 // detail_call_history_item.xml uses screen-relative 52dp / 32dp.
                 // Subtract the card's 16dp inset, instead of adding another inset.
                 if (index < records.lastIndex) OppoDivider(start = 36.dp, end = 16.dp)
@@ -254,14 +255,19 @@ private fun HistoryCard(records: List<CallRecord>) {
 }
 
 @Composable
-private fun CallHistoryItem(record: CallRecord) {
-    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.Top) {
+private fun CallHistoryItem(record: CallRecord, onOpenRecording: ((String) -> Unit)?) {
+    val id = record.storedId
+    val action = if (id != null && onOpenRecording != null) Modifier.clickable { onOpenRecording(id) } else Modifier
+    Row(Modifier.fillMaxWidth().then(action).padding(start = 12.dp, end = 16.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.Top) {
         Icon(painterResource(record.kind.oppoIcon), record.kind.displayLabel(),
             Modifier.padding(top = 3.dp).size(16.dp), tint = if (record.isUnanswered) MissedRed else Color.Unspecified)
         Column(Modifier.weight(1f).padding(start = 8.dp)) {
             Text(record.detailTime ?: record.date, style = oppoTextStyle(16.sp, weight = FontWeight.Medium), maxLines = 1)
             val detail = if (record.isUnanswered) "${record.kind.displayLabel()}  未接通" else record.durationDetail ?: record.kind.displayLabel()
             Text(detail, Modifier.padding(top = 5.dp), style = oppoTextStyle(14.sp, OppoSecondary), maxLines = 1)
+        }
+        if (id != null && onOpenRecording != null) {
+            Text(if (record.hasRecording) "查看录音" else "添加录音", Modifier.align(Alignment.CenterVertically), style = oppoTextStyle(14.sp, OppoGreen))
         }
     }
 }

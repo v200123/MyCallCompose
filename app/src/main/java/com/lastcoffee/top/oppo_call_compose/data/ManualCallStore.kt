@@ -1,10 +1,14 @@
 package com.lastcoffee.top.oppo_call_compose.data
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import java.io.File
+import java.util.UUID
 import com.lastcoffee.top.oppo_call_compose.R
 import com.lastcoffee.top.oppo_call_compose.model.withDefaultStatusAudio
 import androidx.room.Dao
+import androidx.room.ColumnInfo
 import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Insert
@@ -25,17 +29,19 @@ import com.lastcoffee.top.oppo_call_compose.model.CallMediaEntry
 import com.lastcoffee.top.oppo_call_compose.model.CallSessionSetup
 import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
+import com.lastcoffee.top.oppo_call_compose.model.DEFAULT_WAITING_SECONDS
 import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
 import com.lastcoffee.top.oppo_call_compose.model.CallVisualStyle
 import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
 import com.lastcoffee.top.oppo_call_compose.model.withRequiredCallStatuses
 import com.lastcoffee.top.oppo_call_compose.model.withProgrammedCallFlow
-import com.lastcoffee.top.oppo_call_compose.model.forVariant
-import com.lastcoffee.top.oppo_call_compose.model.withVariantRules
+import com.lastcoffee.top.oppo_call_compose.model.mergeLegacyCallStatuses
 import com.lastcoffee.top.oppo_call_compose.model.withVisibleCallButtons
 import com.lastcoffee.top.oppo_call_compose.model.CallRecord
 import com.lastcoffee.top.oppo_call_compose.model.ManualCall
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -51,19 +57,27 @@ class ManualCallStore internal constructor(context: Context, private val databas
     private val bundledMedia by lazy {
         val directory = File(appContext.filesDir, "bundled_status_audio").apply { mkdirs() }
         listOf(
-            Triple("busy", "通话中", R.raw.default_busy),
+            Triple("waiting", "等待接听", R.raw.audio_call),
+            Triple("unreachable", "无法接通", R.raw.audio_busy),
+            Triple("busy", "正在通话中", R.raw.default_busy),
             Triple("no_answer", "暂时无人接听", R.raw.default_no_answer),
             Triple("powered_off", "关机", R.raw.audio_power_off),
             Triple("voicemail", "语音留言", R.raw.default_voicemail),
+            Triple("legacy_no_answer", "旧版无人接听", R.raw.audio_no_response),
+            Triple("legacy_busy", "旧版用户正忙", R.raw.audio_user_busy),
+            Triple("legacy_empty_number", "旧版空号", R.raw.audio_empty_number),
+            Triple("legacy_powered_off", "旧版关机", R.raw.legacy_power_off),
+            Triple("legacy_hangup", "旧版挂断音", R.raw.telephone_hang_up_call),
         ).map { (key, title, resource) ->
-            val extension = if (key == "voicemail") "m4a" else "mp3"
+            val extension = if (key in setOf("voicemail", "unreachable", "legacy_busy")) "m4a" else "mp3"
             val file = File(directory, "$key.$extension")
             if (!file.isFile || file.length() == 0L) {
                 appContext.resources.openRawResource(resource).use { input ->
                     file.outputStream().use { output -> input.copyTo(output) }
                 }
             }
-            CallMediaEntry("builtin_$key", CallAudioMode.STATUS_SOUND, title, file.absolutePath,
+            val mode = if (key == "waiting") CallAudioMode.DEFAULT_TONE else CallAudioMode.STATUS_SOUND
+            CallMediaEntry("builtin_$key", mode, title, file.absolutePath,
                 if (extension == "m4a") "audio/mp4" else "audio/mpeg")
         }
     }
@@ -72,6 +86,9 @@ class ManualCallStore internal constructor(context: Context, private val databas
     private val dao = database.manualCallDao()
     private val importMutex = Mutex()
     private val configurationMutex = Mutex()
+    private val recordingsMutex = Mutex()
+    private val numberBindingsMutex = Mutex()
+    private val recordingsDir = File(appContext.filesDir, "call_recordings")
 
     val calls: Flow<List<ManualCall>> = dao.observeAll().map { rows -> rows.map { it.toManualCall() } }
     val hiddenDemoIndexes: Flow<List<Int>> = dao.observeHiddenDemoIndexes()
@@ -83,15 +100,16 @@ class ManualCallStore internal constructor(context: Context, private val databas
         CallTransferState(
             dao.getCallConfiguration()?.content?.let { encodeConfiguration(decodeConfiguration(it)) }
                 ?: encodeConfiguration(CallFlowConfiguration().withProgrammedCallFlow()),
-            includeBundledMedia(dao.getAllMediaEntries().map { it.toCallMediaEntry() }),
+            dao.getAllMediaEntries().map { it.toCallMediaEntry() }.filterNot { entry -> bundledMedia.any { it.id == entry.id } },
         )
     }
 
     suspend fun replaceTransferState(state: CallTransferState) = configurationMutex.withLock {
         val root = JSONObject(state.configurationJson)
         require((root.optJSONArray("statuses")?.length() ?: 0) > 0) { "通话规则为空" }
-        val mediaIds = state.mediaEntries.map { it.id }.toSet()
-        require(mediaIds.size == state.mediaEntries.size) { "媒体编号重复" }
+        val importedIds = state.mediaEntries.map { it.id }.toSet()
+        require(importedIds.size == state.mediaEntries.size) { "媒体编号重复" }
+        val mediaIds = importedIds + bundledMedia.map { it.id }
         require(state.mediaEntries.all { it.id.isNotBlank() && it.title.isNotBlank() && it.mode.acceptsMimeType(it.mimeType) }) { "媒体信息无效" }
         val previous = dao.getCallConfiguration()?.content?.let(::decodeConfiguration) ?: CallFlowConfiguration()
         val configuration = decodeConfiguration(state.configurationJson).withRequiredCallStatuses(previous).withProgrammedCallFlow().let { config ->
@@ -99,7 +117,7 @@ class ManualCallStore internal constructor(context: Context, private val databas
                 mediaEntryId = status.mediaEntryId?.takeIf { it in mediaIds },
                 soundEntryId = status.soundEntryId?.takeIf { it in mediaIds },
             ) }
-            config.copy(statuses = keepMedia(config.statuses), avatarStatuses = keepMedia(config.avatarStatuses))
+            config.copy(statuses = keepMedia(config.statuses))
         }
         database.withTransaction {
             dao.deleteAllMediaEntries()
@@ -110,44 +128,55 @@ class ManualCallStore internal constructor(context: Context, private val databas
 
     suspend fun configuration(): CallFlowConfiguration = configurationMutex.withLock {
         val saved = dao.getCallConfiguration()
-        if (saved != null) {
-            val config = decodeConfiguration(saved.content)
-            val missingUnreachable = config.statuses.none { it.id == "unreachable" } ||
-                config.avatarStatuses.none { it.id == "unreachable" }
-            if (missingUnreachable) {
-                val unreachable = defaultCallStatuses().first { it.id == "unreachable" }
-                config.copy(
-                    statuses = config.statuses.let { if (it.any { rule -> rule.id == "unreachable" }) it else it + unreachable },
-                    avatarStatuses = config.avatarStatuses.let { if (it.any { rule -> rule.id == "unreachable" }) it else it + unreachable },
-                )
-                    .also { dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(it))) }
-            } else config
-        } else {
-            val defaults = CallFlowConfiguration()
-            dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(defaults)))
-            defaults
-        }
+        val config = saved?.content?.let(::decodeConfiguration) ?: CallFlowConfiguration().withProgrammedCallFlow()
+        val encoded = encodeConfiguration(config)
+        if (saved?.content != encoded) dao.saveCallConfiguration(CallRuleConfigEntity(content = encoded))
+        config
     }
 
-    suspend fun saveConfiguration(configuration: CallFlowConfiguration) = configurationMutex.withLock {
+    suspend fun setSelectedAudioMode(mode: CallAudioMode) = configurationMutex.withLock {
+        val current = dao.getCallConfiguration()?.content?.let(::decodeConfiguration) ?: CallFlowConfiguration()
+        dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(current.copy(selectedAudioMode = mode).withProgrammedCallFlow())))
+    }
+
+    suspend fun saveCallStatuses(statuses: List<CallStatusRule>) = configurationMutex.withLock {
         val previous = dao.getCallConfiguration()?.content?.let(::decodeConfiguration) ?: CallFlowConfiguration()
-        dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(normalizeConfiguration(configuration, previous))))
+        val configuration = normalizeConfiguration(previous.copy(statuses = statuses), previous)
+        dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(configuration)))
     }
 
-    suspend fun saveVariantConfiguration(variant: CallScreenVariant, edited: CallFlowConfiguration) = configurationMutex.withLock {
-        val previous = dao.getCallConfiguration()?.content?.let(::decodeConfiguration) ?: CallFlowConfiguration()
-        val merged = previous.withVariantRules(variant, edited)
-        dao.saveCallConfiguration(CallRuleConfigEntity(content = encodeConfiguration(normalizeConfiguration(merged, previous))))
-    }
-
-    suspend fun prepareCall(number: String, variant: CallScreenVariant = CallScreenVariant.forNumber(number)): CallSessionSetup {
-        val config = configuration().withProgrammedCallFlow().forVariant(variant)
-        val normalizedNumber = number.filter { it.isDigit() || it == '+' }
-        val existing = dao.getNumberPool(normalizedNumber)
-        val mode = existing?.let { CallAudioMode.fromStored(it.mode) } ?: config.selectedAudioMode.also {
-            dao.saveNumberPool(CallNumberPoolEntity(number = normalizedNumber, mode = it.name))
+    suspend fun prepareCall(
+        number: String,
+        variant: CallScreenVariant = CallScreenVariant.forNumber(number),
+        extras: PhoneExtras = PhoneExtras(),
+    ): CallSessionSetup = numberBindingsMutex.withLock {
+        val config = configuration()
+        val normalizedNumber = normalizePhoneNumber(number)
+        database.withTransaction {
+            val existing = dao.getNumberPool(normalizedNumber)
+                ?: dao.getAllNumberPools().firstOrNull { normalizePhoneNumber(it.number) == normalizedNumber }
+            val entries = includeBundledMedia(dao.getAllMediaEntries().map { it.toCallMediaEntry() })
+                .filter { it.mode.acceptsMimeType(it.mimeType) && File(it.filePath).isFile }
+            val explicitRingback = entries.firstOrNull {
+                it.id == extras.ringbackBindings[normalizedNumber] && it.mode == CallAudioMode.RINGBACK
+            }
+            val mode = if (explicitRingback != null) CallAudioMode.RINGBACK
+                else existing?.let { CallAudioMode.fromStored(it.mode) }?.takeIf { it.isCallMode }
+                    ?: config.selectedAudioMode
+            val candidates = entries.filter { it.mode == mode }
+            val selected = explicitRingback
+                ?: candidates.firstOrNull { it.id == existing?.waitingMediaId }
+                ?: if (mode == CallAudioMode.RINGBACK) {
+                    candidates.firstOrNull { it.id == extras.defaultRingbackId } ?: candidates.randomOrNull()
+                } else if (mode == CallAudioMode.DEFAULT_TONE) candidates.firstOrNull() else candidates.randomOrNull()
+            val binding = CallNumberPoolEntity(normalizedNumber, mode.name,
+                waitingMediaId = selected?.id.takeUnless { mode == CallAudioMode.DEFAULT_TONE })
+            if (existing?.number != null && existing.number != normalizedNumber) dao.deleteNumberPool(existing.number)
+            dao.saveNumberPool(binding)
+            val mediaId = if (mode == CallAudioMode.RINGBACK && extras.blocksRingback(number)) null else selected?.id
+            val fallback = entries.firstOrNull { it.mode == CallAudioMode.DEFAULT_TONE }
+            CallSessionSetup(mode, "dialing", config, variant, mediaId ?: fallback?.id)
         }
-        return CallSessionSetup(mode, "dialing", config, variant)
     }
 
     suspend fun addMedia(entry: CallMediaEntry) {
@@ -160,23 +189,33 @@ class ManualCallStore internal constructor(context: Context, private val databas
         return media
     }
 
-    suspend fun updateNumberMode(number: String, mode: CallAudioMode) {
-        dao.saveNumberPool(CallNumberPoolEntity(number = number.filter { it.isDigit() || it == '+' }, mode = mode.name))
+    suspend fun updateNumberMode(number: String, mode: CallAudioMode) = numberBindingsMutex.withLock {
+        val normalized = normalizePhoneNumber(number)
+        database.withTransaction {
+            val previous = dao.getNumberPool(normalized)
+            dao.saveNumberPool(CallNumberPoolEntity(normalized, mode.name,
+                waitingMediaId = previous?.waitingMediaId.takeIf { previous?.mode == mode.name }))
+        }
     }
 
     suspend fun addNumberToPool(number: String) {
         val normalized = normalizePhoneNumber(number)
         if (normalized.length !in 3..20) return
-        if (dao.getAllNumberPools().none { normalizePhoneNumber(it.number) == normalized }) {
-            dao.saveNumberPool(CallNumberPoolEntity(normalized, configuration().selectedAudioMode.name))
+        val defaultMode = configuration().selectedAudioMode.name
+        database.withTransaction {
+            if (dao.getAllNumberPools().none { normalizePhoneNumber(it.number) == normalized }) {
+                dao.saveNumberPool(CallNumberPoolEntity(normalized, defaultMode))
+            }
         }
     }
 
     suspend fun ensureConfiguredNumbers(numbers: Set<String>) {
-        val existing = dao.getAllNumberPools().map { normalizePhoneNumber(it.number) }.toMutableSet()
         val defaultMode = configuration().selectedAudioMode.name
-        numbers.map(::normalizePhoneNumber).filter { it.length in 3..20 }.distinct().forEach { number ->
-            if (existing.add(number)) dao.saveNumberPool(CallNumberPoolEntity(number, defaultMode))
+        database.withTransaction {
+            val existing = dao.getAllNumberPools().map { normalizePhoneNumber(it.number) }.toMutableSet()
+            numbers.map(::normalizePhoneNumber).filter { it.length in 3..20 }.distinct().forEach { number ->
+                if (existing.add(number)) dao.saveNumberPool(CallNumberPoolEntity(number, defaultMode))
+            }
         }
     }
 
@@ -186,25 +225,87 @@ class ManualCallStore internal constructor(context: Context, private val databas
         appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
     }
 
+    internal fun recordingFile(name: String): File = File(recordingsDir, name)
+
+    internal suspend fun saveRecording(id: String, source: Uri?, displayDurationMillis: Long?) =
+        recordingsMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val previous = checkNotNull(dao.getCall(id)) { "通话记录不存在" }
+                var imported: File? = null
+                var saved = false
+                try {
+                    val actualDuration = if (source != null) {
+                        check(recordingsDir.isDirectory || recordingsDir.mkdirs()) { "无法创建录音目录" }
+                        val destination = recordingFile(UUID.randomUUID().toString())
+                        imported = destination
+                        val input = checkNotNull(appContext.contentResolver.openInputStream(source)) { "无法读取录音文件" }
+                        input.use { stream ->
+                            destination.outputStream().use { output ->
+                                val buffer = ByteArray(64 * 1024)
+                                while (true) {
+                                    ensureActive()
+                                    val size = stream.read(buffer)
+                                    if (size < 0) break
+                                    output.write(buffer, 0, size)
+                                }
+                            }
+                        }
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(destination.absolutePath)
+                            check(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes")
+                            checkNotNull(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.takeIf { it > 0 })
+                        } catch (error: Exception) {
+                            throw IllegalArgumentException("无法读取录音，请选择可播放的音频文件", error)
+                        } finally {
+                            retriever.release()
+                        }
+                    } else previous.recordingDurationMillis
+                    val duration = displayDurationMillis ?: actualDuration
+                    val name = imported?.name ?: previous.recordingPath
+                    require(duration > 0) { "请选择录音文件或填写显示时长" }
+                    withContext(NonCancellable) {
+                        check(dao.updateRecording(id, name, duration) == 1) { "通话记录不存在" }
+                        saved = true
+                        if (imported != null) previous.recordingPath?.let { recordingFile(it).delete() }
+                    }
+                } finally {
+                    if (!saved) imported?.delete()
+                }
+            }
+        }
+
     suspend fun delete(record: CallRecord) {
         record.storedId?.let {
-            dao.deleteById(it)
+            deleteStoredRecords(listOf(it))
             appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
         }
         record.demoIndex?.let { dao.hideDemo(HiddenDemoCallEntity(it)) }
     }
 
     suspend fun clearAll() {
-        dao.deleteAllCalls()
+        recordingsMutex.withLock {
+            withContext(Dispatchers.IO + NonCancellable) {
+                dao.deleteAllCalls()
+                recordingsDir.listFiles()?.forEach { it.delete() }
+            }
+        }
         appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
     }
 
     suspend fun deleteRecords(records: List<CallRecord>) {
-        database.withTransaction {
-            records.mapNotNull { it.storedId }.distinct().forEach { dao.deleteById(it) }
-            records.mapNotNull { it.demoIndex }.distinct().forEach { dao.hideDemo(HiddenDemoCallEntity(it)) }
-        }
+        deleteStoredRecords(records.mapNotNull { it.storedId }.distinct(), records.mapNotNull { it.demoIndex }.distinct())
         appContext.contentResolver.notifyChange(CallRecordContract.CallRecord.CONTENT_URI, null)
+    }
+
+    private suspend fun deleteStoredRecords(ids: List<String>, demos: List<Int> = emptyList()) = recordingsMutex.withLock {
+        withContext(Dispatchers.IO + NonCancellable) {
+            val files = database.withTransaction {
+                ids.mapNotNull { id -> dao.getCall(id)?.recordingPath.also { dao.deleteById(id) } }
+                    .also { demos.forEach { dao.hideDemo(HiddenDemoCallEntity(it)) } }
+            }
+            files.forEach { recordingFile(it).delete() }
+        }
     }
 
     suspend fun importLegacyRecords() = withContext(Dispatchers.IO) {
@@ -233,7 +334,7 @@ class ManualCallStore internal constructor(context: Context, private val databas
 
 internal fun openManualCallDatabase(context: Context): ManualCallDatabase =
     Room.databaseBuilder(context.applicationContext, ManualCallDatabase::class.java, "manual_calls.db")
-        .addMigrations(ManualCallMigration1To2, ManualCallMigration2To3, ManualCallMigration3To4, ManualCallMigration4To5)
+        .addMigrations(ManualCallMigration1To2, ManualCallMigration2To3, ManualCallMigration3To4, ManualCallMigration4To5, ManualCallMigration5To6, ManualCallMigration6To7)
         .build()
 
 @Entity(tableName = "manual_calls")
@@ -249,6 +350,8 @@ data class ManualCallEntity(
     val connectedTimeMillis: Long,
     val endTimeMillis: Long,
     val callNumber: Int,
+    val recordingPath: String?,
+    @ColumnInfo(defaultValue = "0") val recordingDurationMillis: Long,
 )
 
 @Entity(tableName = "hidden_demo_calls")
@@ -258,7 +361,11 @@ data class HiddenDemoCallEntity(@PrimaryKey val demoIndex: Int)
 data class CallRuleConfigEntity(@PrimaryKey val id: Int = 1, val content: String)
 
 @Entity(tableName = "call_number_pools")
-data class CallNumberPoolEntity(@PrimaryKey val number: String, val mode: String)
+data class CallNumberPoolEntity(
+    @PrimaryKey val number: String,
+    val mode: String,
+    val waitingMediaId: String? = null,
+)
 
 data class CallTransferState(
     val configurationJson: String,
@@ -273,11 +380,13 @@ data class CallMediaEntity(
 private fun ManualCall.toEntity() = ManualCallEntity(
     id, number, kind.name, durationSeconds, timeMillis, wasConnected,
     attribution, operator, connectedTimeMillis, endTimeMillis, callNumber,
+    recordingPath, recordingDurationMillis,
 )
 
 private fun ManualCallEntity.toManualCall() = ManualCall(
     id, number, CallKind.valueOf(kind), durationSeconds, timeMillis, wasConnected,
     attribution, operator, connectedTimeMillis, endTimeMillis, callNumber,
+    recordingPath, recordingDurationMillis,
 )
 private fun CallMediaEntry.toEntity() = CallMediaEntity(id, mode.name, title, filePath, mimeType, iconPath)
 private fun CallMediaEntity.toCallMediaEntry() = CallMediaEntry(id, CallAudioMode.fromStored(mode), title, filePath, mimeType, iconPath)
@@ -300,17 +409,14 @@ private fun normalizeConfiguration(configuration: CallFlowConfiguration, previou
     return complete.copy(
         initialStatusId = complete.initialStatusId.takeIf { id -> complete.statuses.any { it.id == id } } ?: "dialing",
         statuses = normalizeStatuses(complete.statuses),
-        avatarInitialStatusId = complete.avatarInitialStatusId.takeIf { id -> complete.avatarStatuses.any { it.id == id } } ?: "dialing",
-        avatarStatuses = normalizeStatuses(complete.avatarStatuses),
     )
 }
 
 private fun encodeConfiguration(config: CallFlowConfiguration): String = JSONObject().apply {
     put("initialStatusId", config.initialStatusId)
-    put("avatarInitialStatusId", config.avatarInitialStatusId)
+    put("rulesVersion", 2)
     put("selectedAudioMode", config.selectedAudioMode.name)
     put("statuses", encodeStatuses(config.statuses))
-    put("avatarStatuses", encodeStatuses(config.avatarStatuses))
 }.toString()
 
 private fun encodeStatuses(statuses: List<CallStatusRule>): JSONArray = JSONArray().apply {
@@ -323,6 +429,7 @@ private fun encodeStatuses(statuses: List<CallStatusRule>): JSONArray = JSONArra
             put("playSoundOnce", status.playSoundOnce)
             put("soundMuted", status.soundMuted)
             put("audioPlayCount", status.audioPlayCount)
+            if (status.id == "waiting") put("useDefaultPromptWait", status.useDefaultPromptWait)
             put("callerNameStyle", status.callerNameStyle.toJson())
             put("callerNumberStyle", status.callerNumberStyle.toJson())
             put("locationTextStyle", status.locationTextStyle.toJson())
@@ -338,21 +445,21 @@ private fun encodeStatuses(statuses: List<CallStatusRule>): JSONArray = JSONArra
 
 private fun decodeConfiguration(raw: String): CallFlowConfiguration = runCatching {
     val root = JSONObject(raw)
-    val statuses = decodeStatuses(root.optJSONArray("statuses") ?: JSONArray())
-    val avatarStatuses = root.optJSONArray("avatarStatuses")?.let(::decodeStatuses) ?: statuses
-    val ids = statuses.map { it.id }.toSet()
-    val avatarIds = avatarStatuses.map { it.id }.toSet()
-    CallFlowConfiguration(
-        initialStatusId = root.optString("initialStatusId", "dialing").takeIf { it in ids } ?: statuses.first().id,
+    val legacy = root.optInt("rulesVersion", 1) < 2
+    val statuses = decodeStatuses(root.optJSONArray("statuses") ?: JSONArray(), legacy)
+    val avatarStatuses = root.optJSONArray("avatarStatuses")?.let { decodeStatuses(it, legacy) }.orEmpty()
+    val configuration = CallFlowConfiguration(
         selectedAudioMode = CallAudioMode.fromStored(root.optString("selectedAudioMode")),
         statuses = statuses,
-        avatarInitialStatusId = root.optString("avatarInitialStatusId", root.optString("initialStatusId", "dialing"))
-            .takeIf { it in avatarIds } ?: avatarStatuses.first().id,
-        avatarStatuses = avatarStatuses,
-    ).let { it.withRequiredCallStatuses(it).withProgrammedCallFlow() }
-}.getOrElse { CallFlowConfiguration() }
+    ).withProgrammedCallFlow()
+    if (legacy) {
+        val avatar = CallFlowConfiguration(statuses = avatarStatuses).withProgrammedCallFlow()
+        configuration.copy(statuses = mergeLegacyCallStatuses(configuration.statuses, avatar.statuses))
+            .withProgrammedCallFlow()
+    } else configuration.withRequiredCallStatuses(configuration).withProgrammedCallFlow()
+}.getOrElse { CallFlowConfiguration().withProgrammedCallFlow() }
 
-private fun decodeStatuses(statusesJson: JSONArray): List<CallStatusRule> {
+private fun decodeStatuses(statusesJson: JSONArray, legacy: Boolean): List<CallStatusRule> {
     val statuses = buildList {
         for (i in 0 until statusesJson.length()) {
             val item = statusesJson.optJSONObject(i) ?: continue
@@ -377,22 +484,28 @@ private fun decodeStatuses(statusesJson: JSONArray): List<CallStatusRule> {
                         button.targetStatusId == null && button.label == null && button.visualStyle == CallVisualStyle()
                 }
             val buttons = if (wasLegacyOutgoingDefaults) com.lastcoffee.top.oppo_call_compose.model.defaultButtons(stage) else storedButtons
+            val id = item.optString("id", "status-$i")
+            val duration = item.optInt("durationSeconds", 0)
             add(CallStatusRule(
-                id = item.optString("id", "status-$i"), name = item.optString("name", "状态 ${i + 1}"), stage = stage,
-                durationSeconds = item.optInt("durationSeconds", 0), timeoutTargetId = item.optString("timeoutTargetId").takeIf { it.isNotBlank() && it != "null" },
+                id = id, name = item.optString("name", "状态 ${i + 1}"), stage = stage,
+                durationSeconds = duration, timeoutTargetId = item.optString("timeoutTargetId").takeIf { it.isNotBlank() && it != "null" },
                 buttons = buttons, outcome = item.optString("outcome").takeIf { it.isNotBlank() && it != "null" },
                 mediaEntryId = item.optString("mediaEntryId").takeIf { it.isNotBlank() && it != "null" },
                 soundEntryId = item.optString("soundEntryId").takeIf { it.isNotBlank() && it != "null" },
                 playSoundOnce = item.optBoolean("playSoundOnce", false),
                 soundMuted = item.optBoolean("soundMuted", false),
                 audioPlayCount = item.optInt("audioPlayCount", 0).coerceIn(0, 99),
+                // Older shared rules inferred the short prompt wait from the 8-second duration.
+                useDefaultPromptWait = id == "waiting" && item.optBoolean(
+                    "useDefaultPromptWait", !legacy && duration == DEFAULT_WAITING_SECONDS,
+                ),
                 callerNameStyle = item.optJSONObject("callerNameStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 callerNumberStyle = item.optJSONObject("callerNumberStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 locationTextStyle = item.optJSONObject("locationTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 statusTextStyle = item.optJSONObject("statusTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
-            ).withVisibleCallButtons().withDefaultStatusAudio())
+            ).withVisibleCallButtons().let { if (legacy) it.withDefaultStatusAudio() else it })
         }
-    }.ifEmpty { defaultCallStatuses() }
+    }
     return statuses
 }
 
@@ -443,10 +556,29 @@ private val ManualCallMigration4To5 = object : Migration(4, 5) {
     }
 }
 
+private val ManualCallMigration5To6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE manual_calls ADD COLUMN recordingPath TEXT")
+        db.execSQL("ALTER TABLE manual_calls ADD COLUMN recordingDurationMillis INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+private val ManualCallMigration6To7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE call_number_pools ADD COLUMN waitingMediaId TEXT")
+    }
+}
+
 @Dao
 interface ManualCallDao {
     @Query("SELECT * FROM manual_calls ORDER BY timeMillis DESC, id DESC")
     fun observeAll(): Flow<List<ManualCallEntity>>
+
+    @Query("SELECT * FROM manual_calls WHERE id = :id")
+    suspend fun getCall(id: String): ManualCallEntity?
+
+    @Query("UPDATE manual_calls SET recordingPath = :path, recordingDurationMillis = :duration WHERE id = :id")
+    suspend fun updateRecording(id: String, path: String?, duration: Long): Int
 
     @Insert
     suspend fun insert(call: ManualCallEntity)
@@ -491,6 +623,9 @@ interface ManualCallDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveNumberPool(entry: CallNumberPoolEntity)
 
+    @Query("DELETE FROM call_number_pools WHERE number = :number")
+    suspend fun deleteNumberPool(number: String)
+
     @Query("SELECT * FROM call_media ORDER BY title COLLATE NOCASE")
     fun observeMediaEntries(): Flow<List<CallMediaEntity>>
 
@@ -510,7 +645,7 @@ interface ManualCallDao {
     suspend fun deleteMediaEntry(id: String)
 }
 
-@Database(entities = [ManualCallEntity::class, HiddenDemoCallEntity::class, CallRuleConfigEntity::class, CallNumberPoolEntity::class, CallMediaEntity::class], version = 5, exportSchema = true)
+@Database(entities = [ManualCallEntity::class, HiddenDemoCallEntity::class, CallRuleConfigEntity::class, CallNumberPoolEntity::class, CallMediaEntity::class], version = 7, exportSchema = true)
 abstract class ManualCallDatabase : RoomDatabase() {
     abstract fun manualCallDao(): ManualCallDao
 }

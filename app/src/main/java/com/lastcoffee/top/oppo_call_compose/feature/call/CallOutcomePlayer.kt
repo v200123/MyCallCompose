@@ -13,6 +13,7 @@ import java.util.Locale
 internal enum class CallOutcome(val status: String, val spokenPrompt: String) {
     NO_ANSWER("无人接听", "您拨打的电话暂时无人接听"),
     BUSY("对方通话中", ""),
+    IN_CALL("正在通话中", "您拨打的电话正在通话中，请稍后再拨"),
     EMPTY_NUMBER("对方为空号", "您拨打的号码是空号"),
     POWERED_OFF("对方已关机", "您拨打的号码已关机"),
     UNREACHABLE("无法接通", "您拨打的电话暂时无法接通"),

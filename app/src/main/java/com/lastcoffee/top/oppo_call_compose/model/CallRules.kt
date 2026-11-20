@@ -1,5 +1,7 @@
 package com.lastcoffee.top.oppo_call_compose.model
 
+internal const val BUILT_IN_WAITING_TONE_ID = "builtin_waiting"
+
 /** Audio collection assigned to a simulated phone number. */
 enum class CallAudioMode(val title: String) {
     DEFAULT_TONE("普通铃声"), RINGBACK("彩铃"), MUSIC("音乐"), STATUS_SOUND("状态音效"), DIALPAD_TONE("拨号按键音");
@@ -20,6 +22,7 @@ enum class CallAudioMode(val title: String) {
 
 enum class CallStage(val title: String) {
     DIALING("正在呼叫"), WAITING("等待接听"), OUTCOME("播放提示"), ACTIVE("通话中"), HOLD("保持"),
+    VOICEMAIL("语音留言"),
     DISCONNECTING("正在挂断"), DISCONNECTED("已挂断")
 }
 
@@ -76,30 +79,14 @@ data class CallStatusRule(
     val callerNumberStyle: CallVisualStyle = CallVisualStyle(),
     val locationTextStyle: CallVisualStyle = CallVisualStyle(),
     val statusTextStyle: CallVisualStyle = CallVisualStyle(),
+    val useDefaultPromptWait: Boolean = false,
 )
 
 data class CallFlowConfiguration(
     val initialStatusId: String = "dialing",
     val selectedAudioMode: CallAudioMode = CallAudioMode.DEFAULT_TONE,
     val statuses: List<CallStatusRule> = defaultCallStatuses(),
-    val avatarInitialStatusId: String = "dialing",
-    val avatarStatuses: List<CallStatusRule> = defaultCallStatuses(),
 )
-
-fun CallFlowConfiguration.forVariant(variant: CallScreenVariant): CallFlowConfiguration = when (variant) {
-    CallScreenVariant.WITHOUT_AVATAR -> copy(avatarStatuses = emptyList())
-    CallScreenVariant.WITH_AVATAR -> copy(
-        initialStatusId = avatarInitialStatusId,
-        statuses = avatarStatuses,
-        avatarStatuses = emptyList(),
-    )
-}
-
-fun CallFlowConfiguration.withVariantRules(variant: CallScreenVariant, edited: CallFlowConfiguration): CallFlowConfiguration =
-    when (variant) {
-        CallScreenVariant.WITHOUT_AVATAR -> copy(initialStatusId = edited.initialStatusId, statuses = edited.statuses)
-        CallScreenVariant.WITH_AVATAR -> copy(avatarInitialStatusId = edited.initialStatusId, avatarStatuses = edited.statuses)
-    }
 
 val coreCallStatusIds = setOf("dialing", "waiting", "active")
 
@@ -107,7 +94,6 @@ val coreCallStatusIds = setOf("dialing", "waiting", "active")
 fun CallFlowConfiguration.withRequiredCallStatuses(previous: CallFlowConfiguration = CallFlowConfiguration()): CallFlowConfiguration {
     return copy(
         statuses = keepRequiredStatuses(statuses, previous.statuses),
-        avatarStatuses = keepRequiredStatuses(avatarStatuses, previous.avatarStatuses),
     )
 }
 
@@ -120,22 +106,27 @@ fun CallFlowConfiguration.withProgrammedCallFlow(): CallFlowConfiguration {
             CallStage.DIALING -> "waiting"
             CallStage.WAITING -> "active"
             CallStage.OUTCOME -> "disconnecting"
+            CallStage.VOICEMAIL -> "voicemail_recording"
             CallStage.ACTIVE -> "disconnecting"
             CallStage.HOLD -> "active"
             CallStage.DISCONNECTING -> "disconnected"
             CallStage.DISCONNECTED -> null
         }
         status.copy(
+            name = if (status.id == REMOTE_HANGUP_STATUS_ID) defaultRemoteHangupRule.name else status.name,
             stage = stage,
             timeoutTargetId = nextId,
-            buttons = status.buttons.map { it.copy(targetStatusId = null) },
+            buttons = status.buttons.map { button ->
+                val enabled = if (stage == CallStage.VOICEMAIL && status.stage != stage) {
+                    defaultButtons(stage).first { it.id == button.id }.enabled
+                } else button.enabled
+                button.copy(targetStatusId = null, enabled = enabled)
+            },
         )
     }
     return copy(
         initialStatusId = "dialing",
-        avatarInitialStatusId = "dialing",
         statuses = fixed(statuses),
-        avatarStatuses = fixed(avatarStatuses),
     )
 }
 
@@ -171,10 +162,11 @@ data class CallSessionSetup(
     val initialStatusId: String,
     val configuration: CallFlowConfiguration,
     val screenVariant: CallScreenVariant,
+    val waitingMediaId: String? = null,
 )
 
 fun defaultButtons(stage: CallStage): List<CallButtonRule> {
-    val active = stage == CallStage.ACTIVE || stage == CallStage.HOLD
+    val active = stage == CallStage.ACTIVE || stage == CallStage.HOLD || stage == CallStage.VOICEMAIL
     return CallButtonId.entries.map { id ->
         CallButtonRule(id = id, visible = true, enabled = when (id) {
             CallButtonId.MUTE -> active
@@ -189,7 +181,7 @@ fun defaultButtons(stage: CallStage): List<CallButtonRule> {
     }
 }
 
-fun defaultCallStatuses(): List<CallStatusRule> = listOf(
+internal fun previousDefaultCallStatuses(): List<CallStatusRule> = listOf(
     CallStatusRule("dialing", "正在呼叫", CallStage.DIALING, 1, "waiting"),
     CallStatusRule("waiting", "等待接听", CallStage.WAITING, 30, "active"),
     CallStatusRule("no_answer", "无人接听", CallStage.OUTCOME, 20, "disconnecting", outcome = "NO_ANSWER"),
@@ -205,7 +197,67 @@ fun defaultCallStatuses(): List<CallStatusRule> = listOf(
 ).map { it.withDefaultStatusAudio() }
 
 fun CallStatusRule.withDefaultStatusAudio(): CallStatusRule {
-    if (id !in setOf("busy", "no_answer", "powered_off", "voicemail")) return this
+    if (id !in setOf("busy", "no_answer", "powered_off", "unreachable", "voicemail")) return this
     return if (mediaEntryId == null && soundEntryId == null && !soundMuted && !playSoundOnce)
         copy(mediaEntryId = "builtin_$id") else this
+}
+
+internal const val DEFAULT_WAITING_SECONDS = 8
+internal const val REMOTE_HANGUP_STATUS_ID = "remote_hangup"
+
+internal val defaultRemoteHangupRule = CallStatusRule(
+    id = REMOTE_HANGUP_STATUS_ID,
+    name = "通话结束",
+    stage = CallStage.DISCONNECTING,
+    durationSeconds = 1,
+    timeoutTargetId = "disconnected",
+    soundEntryId = "builtin_legacy_hangup",
+    playSoundOnce = true,
+)
+
+fun defaultCallStatuses(): List<CallStatusRule> = previousDefaultCallStatuses().map { status ->
+    when (status.id) {
+        "dialing" -> status.copy(name = "正在拨号", durationSeconds = 2)
+        "waiting" -> status.copy(durationSeconds = DEFAULT_WAITING_SECONDS, useDefaultPromptWait = true)
+        "no_answer", "busy", "empty_number", "powered_off", "unreachable" -> status.copy(
+            durationSeconds = 0,
+            audioPlayCount = 4,
+            mediaEntryId = when (status.id) {
+                "unreachable" -> "builtin_unreachable"
+                else -> "builtin_legacy_${status.id}"
+            },
+        )
+        "disconnecting" -> status.copy(playSoundOnce = true, soundEntryId = "builtin_legacy_hangup")
+        "disconnected" -> status.copy(durationSeconds = 0)
+        "voicemail" -> status.copy(stage = CallStage.VOICEMAIL, timeoutTargetId = "voicemail_recording", buttons = defaultButtons(CallStage.VOICEMAIL))
+        else -> status
+    }
+}.toMutableList().apply {
+    add(indexOfFirst { it.id == "empty_number" }, CallStatusRule(
+        "in_call", "正在通话中", CallStage.OUTCOME, timeoutTargetId = "disconnecting", outcome = "IN_CALL",
+        mediaEntryId = "builtin_busy", audioPlayCount = 4,
+    ))
+    add(indexOfFirst { it.id == "active" }, CallStatusRule(
+        "voicemail_recording", "留言中", CallStage.ACTIVE, timeoutTargetId = "disconnecting",
+    ))
+    add(indexOfFirst { it.id == "disconnected" }, defaultRemoteHangupRule)
+}
+
+internal fun mergeLegacyCallStatuses(
+    withoutAvatar: List<CallStatusRule>,
+    withAvatar: List<CallStatusRule>,
+): List<CallStatusRule> {
+    val oldDefaults = CallFlowConfiguration(statuses = previousDefaultCallStatuses())
+        .withProgrammedCallFlow().statuses.associateBy(CallStatusRule::id)
+    val plain = withoutAvatar.associateBy(CallStatusRule::id)
+    val avatar = withAvatar.associateBy(CallStatusRule::id)
+    val defaults = defaultCallStatuses()
+    val builtInIds = defaults.mapTo(mutableSetOf(), CallStatusRule::id)
+    val merged = defaults.map { default ->
+        val old = oldDefaults[default.id]
+        plain[default.id]?.takeUnless { it == old }
+            ?: avatar[default.id]?.takeUnless { it == old }
+            ?: default
+    }
+    return merged + (withoutAvatar + withAvatar).filterNot { it.id in builtInIds }.distinctBy(CallStatusRule::id)
 }

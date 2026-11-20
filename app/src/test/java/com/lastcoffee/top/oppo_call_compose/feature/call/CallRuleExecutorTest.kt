@@ -3,11 +3,37 @@ package com.lastcoffee.top.oppo_call_compose.feature.call
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
 import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
+import com.lastcoffee.top.oppo_call_compose.model.defaultRemoteHangupRule
 import com.lastcoffee.top.oppo_call_compose.model.withProgrammedCallFlow
 import org.junit.Assert.*
 import org.junit.Test
 
 class CallRuleExecutorTest {
+    @Test fun defaultUnreachableCallWaitsThreeSecondsBeforePlayingThePrompt() {
+        val config = CallFlowConfiguration().withProgrammedCallFlow()
+        val executor = CallRuleExecutor(config, "dialing", 0L, "unreachable", promptWaitSeconds = 3)
+        assertEquals(2_000L, executor.remainingMillis(0L))
+        assertTrue(executor.advanceIfDue(executor.step.revision, 2_000L))
+        assertEquals("waiting", executor.step.rule.id)
+        assertEquals(3_000L, executor.remainingMillis(2_000L))
+        assertTrue(executor.advanceIfDue(executor.step.revision, 5_000L))
+        assertEquals("unreachable", executor.step.rule.id)
+        assertTrue(executor.audioFinished(executor.step.revision, 6_000L))
+        assertEquals("disconnecting", executor.step.rule.id)
+    }
+
+    @Test fun explicitlyConfiguredEightSecondWaitIsHonoredForPromptNumbers() {
+        val defaults = CallFlowConfiguration().withProgrammedCallFlow()
+        val config = defaults.copy(statuses = defaults.statuses.map {
+            if (it.id == "waiting") it.copy(durationSeconds = 8, useDefaultPromptWait = false) else it
+        })
+        val runner = CallRuleExecutor(config, "waiting", 0L, "unreachable", promptWaitSeconds = 3)
+
+        assertFalse(runner.advanceIfDue(0, 3_000L))
+        assertTrue(runner.advanceIfDue(0, 8_000L))
+        assertEquals("unreachable", runner.step.rule.id)
+    }
+
     private fun executor(vararg rules: CallStatusRule) = CallRuleExecutor(
         CallFlowConfiguration(initialStatusId = rules.first().id, statuses = rules.toList()), rules.first().id, 0,
     )
@@ -17,9 +43,10 @@ class CallRuleExecutorTest {
         val runner = CallRuleExecutor(configuration, configuration.initialStatusId, 0)
 
         assertEquals("dialing", runner.step.rule.id)
-        assertTrue(runner.advanceIfDue(0, 1_000))
+        assertTrue(runner.advanceIfDue(0, 2_000))
         assertEquals("waiting", runner.step.rule.id)
-        assertTrue(runner.advanceIfDue(1, 31_000))
+        assertFalse(runner.advanceIfDue(1, 9_999))
+        assertTrue(runner.advanceIfDue(1, 10_000))
         assertEquals("active", runner.step.rule.id)
     }
 
@@ -28,7 +55,7 @@ class CallRuleExecutorTest {
         val runner = CallRuleExecutor(configuration, "dialing", 0)
 
         assertTrue(runner.moveTo("busy", 2_000))
-        assertTrue(runner.advanceIfDue(1, 7_000))
+        assertTrue(runner.audioFinished(1, 7_000))
         assertEquals("disconnecting", runner.step.rule.id)
         assertTrue(runner.advanceIfDue(2, 8_000))
         assertEquals("disconnected", runner.step.rule.id)
@@ -63,7 +90,7 @@ class CallRuleExecutorTest {
         })
         val runner = CallRuleExecutor(configuration, "dialing", 0, promptStatusId = "busy")
 
-        assertTrue(runner.advanceIfDue(0, 1_000))
+        assertTrue(runner.advanceIfDue(0, 2_000))
         assertNull(runner.remainingMillis(60_000))
         assertTrue(runner.audioFinished(1, 5_000))
         assertEquals("busy", runner.step.rule.id)
@@ -88,6 +115,27 @@ class CallRuleExecutorTest {
         assertTrue(runner.claimCompletion(4, 8_000))
         assertEquals(3, runner.timing.durationSeconds(8_000))
         assertFalse(runner.claimCompletion(4, 9_000))
+    }
+
+    @Test fun remoteHangupUsesItsOwnRuleAndStopsTimingOnce() {
+        val active = CallStatusRule("talk", "通话中", CallStage.ACTIVE)
+        val ending = CallStatusRule("ending", "本机挂断", CallStage.DISCONNECTING, 1, "end")
+        val remoteEnding = defaultRemoteHangupRule.copy(
+            name = "对方已结束", durationSeconds = 3, soundEntryId = "remote-tone",
+        )
+        val disconnected = CallStatusRule("end", "已挂断", CallStage.DISCONNECTED)
+        val remote = executor(active, remoteEnding, ending, disconnected)
+        val local = executor(active, remoteEnding, ending, disconnected)
+
+        assertTrue(remote.hangup(2_500L, fromRemote = true))
+        assertTrue(local.hangup(2_500L))
+        assertEquals(remoteEnding, remote.step.rule)
+        assertEquals(ending, local.step.rule)
+        assertFalse(remote.hangup(2_800L, fromRemote = true))
+        assertFalse(remote.advanceIfDue(remote.step.revision, 3_500L))
+        assertTrue(remote.advanceIfDue(remote.step.revision, 5_500L))
+        assertTrue(remote.claimCompletion(remote.step.revision, 5_500L))
+        assertEquals(2, remote.timing.durationSeconds(5_500L))
     }
 
     @Test fun hangupInvalidatesThePendingAnswerAndMediaCallback() {
@@ -218,7 +266,7 @@ class CallRuleExecutorTest {
     @Test fun emptyConfigurationUsesRunnableDefaults() {
         val runner = CallRuleExecutor(CallFlowConfiguration(statuses = emptyList()), "missing", 0)
         assertEquals(CallStage.DIALING, runner.step.rule.stage)
-        assertTrue(runner.advanceIfDue(0, 1_000))
+        assertTrue(runner.advanceIfDue(0, 2_000))
         assertEquals(CallStage.WAITING, runner.step.rule.stage)
     }
 }

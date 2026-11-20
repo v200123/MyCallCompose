@@ -36,9 +36,6 @@ import com.lastcoffee.top.oppo_call_compose.data.PhoneExtras
 import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
 import com.lastcoffee.top.oppo_call_compose.data.normalizePhoneNumber
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
-import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
-import com.lastcoffee.top.oppo_call_compose.model.CallStage
-import com.lastcoffee.top.oppo_call_compose.model.forVariant
 
 @Composable
 fun CallPromptNumbersScreen(
@@ -51,22 +48,21 @@ fun CallPromptNumbersScreen(
     var adding by remember(type) { mutableStateOf(false) }
     var deleting by remember(type) { mutableStateOf<String?>(null) }
     var clearing by remember(type) { mutableStateOf(false) }
-    var variant by remember(type) { mutableStateOf(CallScreenVariant.WITHOUT_AVATAR) }
     val numbers = settings.promptNumbers.filterValues { it == type }.keys.sorted()
-    val outcomeRules = configuration.forVariant(variant).statuses.filter { it.stage == CallStage.OUTCOME }
-    val selectedRuleId = settings.promptRuleFor(type, variant)
+    val outcomeRules = configuration.statuses.filter(type::acceptsRule)
+    val selectedRuleId = settings.promptRuleFor(type)
     val selectedRule = outcomeRules.firstOrNull { it.id == selectedRuleId }
 
     ExtrasFrame(type.title, onBack) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-            CallScreenVariant.entries.forEach { option ->
-                if (variant == option) Button(onClick = {}, modifier = Modifier.weight(1f)) { Text(option.title) }
-                else TextButton(onClick = { variant = option }, modifier = Modifier.weight(1f)) { Text(option.title) }
-            }
+        val playbackHint = when (type) {
+            CallPromptType.NO_ANSWER -> "先播完一遍彩铃或音乐，普通铃声响 15 声，再播放无人接听提示。"
+            CallPromptType.BUSY -> "先播放 4 秒彩铃或音乐，普通铃声响 4 声，再播放忙线提示。"
+            CallPromptType.VOICEMAIL -> "接通后播放留言引导，随后进入留言中，持续计时直到挂断。"
+            else -> "拨号后直接播放对应提示音。"
         }
-        Text("分别为两种界面选择提示规则；号码按其界面类型使用对应规则。", color = Color.Gray, modifier = Modifier.padding(16.dp))
+        Text(playbackHint, color = Color.Gray, modifier = Modifier.padding(16.dp))
         BindingDropdown("提示规则", selectedRule?.name.orEmpty(), outcomeRules.map { it.id to it.name },
-            onSelect = { store.bindPromptCategoryRule(type, it, variant) },
+            onSelect = { store.bindPromptCategoryRule(type, it) },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
         if (selectedRule == null) Text("请先选择有效的提示规则", color = Color.Red, modifier = Modifier.padding(horizontal = 16.dp))
         Button(onClick = { adding = true }, enabled = selectedRule != null,

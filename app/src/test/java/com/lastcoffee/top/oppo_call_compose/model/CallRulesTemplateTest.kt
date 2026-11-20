@@ -37,39 +37,42 @@ class CallRulesTemplateTest {
         assertEquals(defaultCallStatuses().map { it.id } + "custom", result.statuses.map { it.id })
     }
 
-    @Test fun avatarAndPlainRulesStayIndependent() {
-        val config = CallFlowConfiguration()
-        val avatarCopy = config.avatarStatuses.first { it.id == "waiting" }
-            .copy(id = "avatar-wait", name = "头像等待", durationSeconds = 8)
-        val edited = config.withVariantRules(CallScreenVariant.WITH_AVATAR,
-            config.forVariant(CallScreenVariant.WITH_AVATAR).copy(
-                initialStatusId = avatarCopy.id,
-                statuses = config.avatarStatuses + avatarCopy,
-            ))
-        val saved = edited.withRequiredCallStatuses(config)
+    @Test fun existingRulesGetASeparateRemoteHangupDefault() {
+        val existing = CallFlowConfiguration(statuses = defaultCallStatuses()
+            .filterNot { it.id == REMOTE_HANGUP_STATUS_ID }
+            .map { if (it.id == "disconnecting") it.copy(durationSeconds = 6) else it })
+        val updated = existing.withRequiredCallStatuses(existing).withProgrammedCallFlow()
 
-        assertEquals(config.statuses.associateBy { it.id }, saved.statuses.associateBy { it.id })
-        assertEquals("dialing", saved.initialStatusId)
-        assertEquals("avatar-wait", saved.avatarInitialStatusId)
-        assertTrue(saved.avatarStatuses.any { it.id == "avatar-wait" })
-        assertFalse(saved.statuses.any { it.id == "avatar-wait" })
+        assertEquals(defaultRemoteHangupRule, updated.statuses.first { it.id == REMOTE_HANGUP_STATUS_ID })
+        assertEquals(6, updated.statuses.first { it.id == "disconnecting" }.durationSeconds)
     }
 
-    @Test fun avatarCoreStatusCanBeEditedWithoutChangingPlainRules() {
-        val previous = CallFlowConfiguration()
-        val changed = previous.avatarStatuses.first { it.id == "active" }.copy(name = "客服通话中", durationSeconds = 15)
-        val proposed = previous.copy(avatarStatuses = previous.avatarStatuses.map { if (it.id == "active") changed else it })
+    @Test fun legacyRulesMergeBothLayoutsAndRefreshUntouchedDefaults() {
+        val old = CallFlowConfiguration(statuses = previousDefaultCallStatuses()).withProgrammedCallFlow().statuses
+        val waiting = old.first { it.id == "waiting" }.copy(durationSeconds = 15)
+        val active = old.first { it.id == "active" }.copy(name = "客服通话中")
+        val extra = CallStatusRule("avatar-custom", "旧头像自定义", CallStage.OUTCOME)
+        val plain = old.map { if (it.id == "waiting") waiting else it }
+        val avatar = old.map {
+            when (it.id) {
+                "waiting" -> waiting.copy(durationSeconds = 20)
+                "active" -> active
+                else -> it
+            }
+        } + extra
 
-        val saved = proposed.withRequiredCallStatuses(previous)
-
-        assertEquals(changed, saved.avatarStatuses.first { it.id == "active" })
-        assertEquals(previous.statuses.first { it.id == "active" }, saved.statuses.first { it.id == "active" })
+        val merged = mergeLegacyCallStatuses(plain, avatar).associateBy { it.id }
+        assertEquals(waiting, merged["waiting"])
+        assertEquals(active, merged["active"])
+        assertEquals(extra, merged[extra.id])
+        assertEquals(2, merged.getValue("dialing").durationSeconds)
+        assertEquals(4, merged.getValue("unreachable").audioPlayCount)
+        assertEquals(8, mergeLegacyCallStatuses(old, old).first { it.id == "waiting" }.durationSeconds)
     }
 
     @Test fun programmedFlowDiscardsLegacyEntryAndJumpChoices() {
         val old = CallFlowConfiguration(
             initialStatusId = "busy",
-            avatarInitialStatusId = "active",
             statuses = defaultCallStatuses().map { status ->
                 if (status.id == "waiting") status.copy(name = "自定义等待", durationSeconds = 7, timeoutTargetId = "busy",
                     buttons = status.buttons.map { it.copy(targetStatusId = "active") }) else status
@@ -80,23 +83,11 @@ class CallRulesTemplateTest {
         val waiting = fixed.statuses.first { it.id == "waiting" }
 
         assertEquals("dialing", fixed.initialStatusId)
-        assertEquals("dialing", fixed.avatarInitialStatusId)
         assertEquals("active", waiting.timeoutTargetId)
         assertEquals("自定义等待", waiting.name)
         assertEquals(7, waiting.durationSeconds)
         assertTrue(waiting.buttons.all { it.targetStatusId == null })
         assertEquals("disconnecting", fixed.statuses.first { it.id == "no_answer" }.timeoutTargetId)
-    }
-
-    @Test fun bothRuleSetsKeepRequiredStatusesAndNineButtons() {
-        val config = CallFlowConfiguration(
-            avatarStatuses = listOf(CallStatusRule("custom-avatar", "头像自定义", CallStage.ACTIVE,
-                buttons = listOf(CallButtonRule(CallButtonId.MUTE, visible = false)))),
-        ).withRequiredCallStatuses()
-
-        assertEquals(3, config.statuses.count { it.id in coreCallStatusIds })
-        assertEquals(3, config.avatarStatuses.count { it.id in coreCallStatusIds })
-        assertTrue(config.avatarStatuses.all { rule -> rule.buttons.size == 9 && rule.buttons.all { it.visible } })
     }
 
     @Test fun serviceNumberUsesAvatarLayoutByDefault() {

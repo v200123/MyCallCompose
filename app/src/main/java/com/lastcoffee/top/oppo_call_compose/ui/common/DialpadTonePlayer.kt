@@ -20,9 +20,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
 /** Local DTMF feedback; the in-call pad follows the communication output route. */
-internal class DialpadTonePlayer(context: Context, private val inCall: Boolean = false) {
+internal class DialpadTonePlayer(context: Context, inCall: Boolean = false) {
     private val audioManager = context.applicationContext.getSystemService(AudioManager::class.java)
-    private val stream = if (inCall) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_DTMF
+    // Android can tie STREAM_DTMF to ring volume when there is no active call.
+    private val stream = if (inCall) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC
     private var generator: ToneGenerator? = null
 
     fun play(key: String) {
@@ -41,9 +42,8 @@ internal class DialpadTonePlayer(context: Context, private val inCall: Boolean =
             "#" -> ToneGenerator.TONE_DTMF_P
             else -> return
         }
-        if ((!inCall && audioManager.ringerMode != AudioManager.RINGER_MODE_NORMAL) ||
-            audioManager.getStreamVolume(stream) == 0) {
-            if (BuildConfig.DEBUG) Log.d("DialpadTone", "blocked by ringer mode or DTMF volume")
+        if (audioManager.getStreamVolume(stream) == 0) {
+            if (BuildConfig.DEBUG) Log.d("DialpadTone", "blocked by playback volume")
             return
         }
         runCatching {

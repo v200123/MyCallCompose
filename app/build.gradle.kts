@@ -14,8 +14,8 @@ android {
         applicationId = "com.lastcoffee.top.oppo_call_compose"
         minSdk = 26
         targetSdk = 37
-        versionCode = 13
-        versionName = "1.3"
+        versionCode = 17
+        versionName = "1.7"
         buildConfigField("String", "UPDATE_SERVICE_BASE_URL", "\"http://www.lastcoffee.top:8082\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -51,8 +51,6 @@ dependencies {
     // phone-number-geo uses SLF4J but publishes its logging bridge as optional.
     implementation("org.slf4j:slf4j-api:1.7.36")
     runtimeOnly("org.slf4j:slf4j-nop:1.7.36")
-    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
-    implementation("com.belerweb:pinyin4j:2.5.1")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

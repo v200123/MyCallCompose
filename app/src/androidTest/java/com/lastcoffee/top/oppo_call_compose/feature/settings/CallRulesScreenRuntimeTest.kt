@@ -20,7 +20,7 @@ class CallRulesScreenRuntimeTest {
     @Test fun savedRulesReplaceTheInitialDefaultsWhenTheyLoad() {
         var configuration by mutableStateOf(CallFlowConfiguration())
         compose.setContent {
-            CallRulesScreen(configuration, PhoneExtras(), emptyList(), onAddMedia = {}, onBack = {}, onSave = { _, _ -> })
+            CallRulesScreen(configuration, PhoneExtras(), emptyList(), onAddMedia = {}, onBack = {}, onSave = {})
         }
 
         compose.runOnUiThread {

@@ -40,7 +40,7 @@ internal fun DialpadToneSettingsRow(enabled: Boolean, onEnabledChange: (Boolean)
     ) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text("播放拨号音", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Text("按数字、* 或 # 时播放系统按键音；静音或振动模式下不播放", fontSize = 14.sp, color = Color(0xFF858585))
+            Text("按数字、* 或 # 时播放按键音", fontSize = 14.sp, color = Color(0xFF858585))
         }
         Switch(checked = enabled, onCheckedChange = null)
     }

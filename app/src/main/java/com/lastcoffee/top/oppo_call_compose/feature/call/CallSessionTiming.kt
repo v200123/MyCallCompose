@@ -18,7 +18,7 @@ internal class CallSessionTiming(val startedAtElapsedMillis: Long) {
         if (endedAtElapsedMillis != null) return
 
         when (stage) {
-            CallStage.ACTIVE, CallStage.HOLD -> {
+            CallStage.ACTIVE, CallStage.HOLD, CallStage.VOICEMAIL -> {
                 if (connectedAtElapsedMillis == null) connectedAtElapsedMillis = now
             }
             CallStage.DISCONNECTING, CallStage.DISCONNECTED -> endedAtElapsedMillis = now

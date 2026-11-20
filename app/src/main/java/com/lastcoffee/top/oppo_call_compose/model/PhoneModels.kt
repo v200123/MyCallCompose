@@ -27,6 +27,7 @@ data class CallRecord(
     val timeMillis: Long = 0,
     val attribution: String? = null,
     val operator: String? = null,
+    val hasRecording: Boolean = false,
 )
 
 data class ContactMatch(

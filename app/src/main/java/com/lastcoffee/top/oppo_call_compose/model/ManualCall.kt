@@ -17,6 +17,8 @@ data class ManualCall(
     val connectedTimeMillis: Long = 0,
     val endTimeMillis: Long = 0,
     val callNumber: Int = 0,
+    val recordingPath: String? = null,
+    val recordingDurationMillis: Long = 0,
 ) {
     fun toCallRecord(): CallRecord {
         val time = Instant.ofEpochMilli(timeMillis).atZone(ZoneId.systemDefault())
@@ -36,6 +38,7 @@ data class ManualCall(
             timeMillis = timeMillis,
             attribution = attribution,
             operator = operator,
+            hasRecording = recordingPath != null || recordingDurationMillis > 0,
         )
     }
 }

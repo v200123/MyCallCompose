@@ -18,8 +18,7 @@ class MainActivity : ComponentActivity() {
             config = UpdateConfig(baseUrl = BuildConfig.UPDATE_SERVICE_BASE_URL),
         )
         enableEdgeToEdge()
-        setContent {
-            OPPO_Call_ComposeTheme(darkTheme = false, dynamicColor = false) {
+        setContent {            OPPO_Call_ComposeTheme(darkTheme = false, dynamicColor = false) {
                 OppoPhoneApp(onCheckForUpdate = appUpdater::checkAndShowUserInitiated)
             }
         }

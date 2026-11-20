@@ -2,6 +2,8 @@ package com.lastcoffee.top.oppo_call_compose.data
 
 import android.content.Context
 import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
+import com.lastcoffee.top.oppo_call_compose.model.CallStage
+import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
@@ -42,11 +44,27 @@ private fun mainlandMobileDigits(number: String): String? {
     return mobile.takeIf(mainlandMobilePattern::matches)
 }
 
-enum class CallPromptType(val title: String, val legacyStatusId: String) {
+enum class CallPromptType(val title: String, val legacyStatusId: String, val defaultWaitSeconds: Int = 1) {
     POWER_OFF("关机提示音号码", "powered_off"),
     EMPTY_NUMBER("空号提示音号码", "empty_number"),
     BUSY("用户正忙提示音号码", "busy"),
-    UNREACHABLE("无法接通提示音号码", "unreachable"),
+    NO_ANSWER("无人接听提示音号码", "no_answer"),
+    IN_CALL("正在通话中提示音号码", "in_call"),
+    UNREACHABLE("无法接通提示音号码", "unreachable", 3),
+    VOICEMAIL("语音留言号码", "voicemail");
+
+    fun acceptsRule(rule: CallStatusRule): Boolean =
+        if (this == VOICEMAIL) rule.stage == CallStage.VOICEMAIL else rule.stage == CallStage.OUTCOME
+
+    val defaultMediaId: String get() = when (this) {
+        POWER_OFF -> "builtin_legacy_powered_off"
+        EMPTY_NUMBER -> "builtin_legacy_empty_number"
+        BUSY -> "builtin_legacy_busy"
+        NO_ANSWER -> "builtin_legacy_no_answer"
+        IN_CALL -> "builtin_busy"
+        UNREACHABLE -> "builtin_unreachable"
+        VOICEMAIL -> "builtin_voicemail"
+    }
 }
 
 data class PhoneExtras(
@@ -61,7 +79,6 @@ data class PhoneExtras(
     val dialpadToneEnabled: Boolean = false,
     val dualSimDisplayEnabled: Boolean = false,
     val screenVariants: Map<String, CallScreenVariant> = emptyMap(),
-    val avatarPromptCategoryRules: Map<CallPromptType, String> = emptyMap(),
     val avatarPhotos: Map<String, String> = emptyMap(),
 ) {
     fun locationFor(number: String): String? = customLocationMatch(number)?.location?.displayText
@@ -81,13 +98,9 @@ data class PhoneExtras(
 
     fun promptFor(number: String): CallPromptType? = promptNumbers[normalizePhoneNumber(number)]
 
-    fun promptCategoryRulesFor(variant: CallScreenVariant): Map<CallPromptType, String> =
-        if (variant == CallScreenVariant.WITH_AVATAR) avatarPromptCategoryRules else promptCategoryRules
+    fun promptRuleFor(type: CallPromptType): String = promptCategoryRules[type] ?: type.legacyStatusId
 
-    fun promptRuleFor(type: CallPromptType, variant: CallScreenVariant = CallScreenVariant.WITHOUT_AVATAR): String =
-        promptCategoryRulesFor(variant)[type] ?: type.legacyStatusId
-
-    fun promptRuleFor(number: String): String? = promptFor(number)?.let { promptRuleFor(it, screenVariantFor(number)) }
+    fun promptRuleFor(number: String): String? = promptFor(number)?.let(::promptRuleFor)
 
     fun statusFor(number: String): String? = statusBindings[normalizePhoneNumber(number)]
 
@@ -160,10 +173,8 @@ class PhoneExtrasStore(context: Context) {
 
     fun clearAutoHangUpRules() = update { it.copy(autoHangUpRules = emptyMap()) }
 
-    fun bindPromptCategoryRule(type: CallPromptType, ruleId: String, variant: CallScreenVariant = CallScreenVariant.WITHOUT_AVATAR) = update {
-        if (variant == CallScreenVariant.WITH_AVATAR)
-            it.copy(avatarPromptCategoryRules = it.avatarPromptCategoryRules + (type to ruleId))
-        else it.copy(promptCategoryRules = it.promptCategoryRules + (type to ruleId))
+    fun bindPromptCategoryRule(type: CallPromptType, ruleId: String) = update {
+        it.copy(promptCategoryRules = it.promptCategoryRules + (type to ruleId))
     }
 
     fun savePromptNumber(number: String, type: CallPromptType) = update {
@@ -238,7 +249,6 @@ class PhoneExtrasStore(context: Context) {
         put("promptNumbers", JSONObject(value.promptNumbers.mapValues { it.value.name }))
         put("statusBindings", JSONObject(value.statusBindings))
         put("promptCategoryRules", JSONObject(value.promptCategoryRules.mapKeys { it.key.name }))
-        put("avatarPromptCategoryRules", JSONObject(value.avatarPromptCategoryRules.mapKeys { it.key.name }))
         put("dialpadToneEnabled", value.dialpadToneEnabled)
         put("dualSimDisplayEnabled", value.dualSimDisplayEnabled)
         put("screenVariants", JSONObject(value.screenVariants.mapValues { it.value.name }))
@@ -336,7 +346,6 @@ class PhoneExtrasStore(context: Context) {
                     .firstOrNull()?.key?.let { promptCategoryRules[type] = it }
             }
         }
-        if (!root.has("avatarPromptCategoryRules")) avatarPromptCategoryRules.putAll(promptCategoryRules)
         PhoneExtras(
             locations,
             root.optString("defaultRingbackId").takeIf { it.isNotBlank() && it != "null" },
@@ -345,11 +354,10 @@ class PhoneExtrasStore(context: Context) {
             autoHangUpRules,
             promptNumbers,
             statusBindings,
-            promptCategoryRules,
+            avatarPromptCategoryRules + promptCategoryRules,
             dialpadToneEnabled = root.optBoolean("dialpadToneEnabled", false),
             dualSimDisplayEnabled = root.optBoolean("dualSimDisplayEnabled", false),
             screenVariants = screenVariants,
-            avatarPromptCategoryRules = avatarPromptCategoryRules,
             avatarPhotos = avatarPhotos,
         )
     }.getOrDefault(PhoneExtras())

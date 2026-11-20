@@ -1,6 +1,7 @@
 package com.lastcoffee.top.oppo_call_compose.feature.settings
 
 import android.graphics.BitmapFactory
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -22,8 +23,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -69,9 +72,12 @@ import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
 import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
 import com.lastcoffee.top.oppo_call_compose.model.CallMediaEntry
+import com.lastcoffee.top.oppo_call_compose.model.BUILT_IN_WAITING_TONE_ID
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
 import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
-import com.lastcoffee.top.oppo_call_compose.model.forVariant
+import com.lastcoffee.top.oppo_call_compose.model.REMOTE_HANGUP_STATUS_ID
+import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -82,26 +88,61 @@ fun CallModeSettingsScreen(
     onBack: () -> Unit,
     onSelectMode: (CallAudioMode) -> Unit,
     onOpenRules: () -> Unit,
+    onOpenDefaultAudio: () -> Unit,
     onOpenLibrary: (CallAudioMode) -> Unit,
 ) {
     SettingsFrame("通话规则与音频", onBack) {
-        Text("新号码默认归入所选音频池；号码已存在时沿用原归属。", color = Color(0xFF707782), modifier = Modifier.padding(horizontal = 16.dp))
-        CallAudioMode.entries.filter { it.isCallMode }.forEach { mode ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)
-                    .background(Color.White, RoundedCornerShape(16.dp)).clickable { onSelectMode(mode) }.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(selected = config.selectedAudioMode == mode, onClick = { onSelectMode(mode) })
-                Text(mode.title, modifier = Modifier.weight(1f), fontSize = 17.sp)
-                TextButton(onClick = { onOpenLibrary(mode) }) { Text("管理库") }
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("新号码默认归入所选音频池；号码已存在时沿用原归属。", color = Color(0xFF707782), modifier = Modifier.padding(horizontal = 16.dp))
+            CallAudioMode.entries.filter { it.isCallMode }.forEach { mode ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)
+                        .background(Color.White, RoundedCornerShape(16.dp)).clickable { onSelectMode(mode) }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = config.selectedAudioMode == mode, onClick = { onSelectMode(mode) })
+                    Text(mode.title, modifier = Modifier.weight(1f), fontSize = 17.sp)
+                    TextButton(onClick = { onOpenLibrary(mode) }) { Text("管理库") }
+                }
             }
+            SettingsLink("状态规则", "所有通话共用", onOpenRules)
+            SettingsLink("默认音频", "按通话状态试听内置音频", onOpenDefaultAudio)
         }
-        SettingsLink("状态规则", "无头像 / 有头像两套", onOpenRules)
     }
 }
 
-private val builtInStatusIds = setOf("dialing", "waiting", "no_answer", "busy", "empty_number", "powered_off", "unreachable", "active", "hold", "disconnecting", "disconnected")
+private val builtInStatuses = defaultCallStatuses()
+private val builtInStatusIds = builtInStatuses.mapTo(mutableSetOf(), CallStatusRule::id)
+private val CallStatusRule.settingsTitle: String
+    get() = if (id == REMOTE_HANGUP_STATUS_ID) "对方挂断" else name
+
+@Composable
+internal fun DefaultCallAudioScreen(mediaEntries: List<CallMediaEntry>, mode: CallAudioMode, onBack: () -> Unit) {
+    val entriesById = remember(mediaEntries) { mediaEntries.associateBy(CallMediaEntry::id) }
+    SettingsFrame("默认音频", onBack) {
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(builtInStatuses, key = CallStatusRule::id) { status ->
+                val audioId = when {
+                    status.stage == CallStage.WAITING -> BUILT_IN_WAITING_TONE_ID
+                    status.playSoundOnce -> status.soundEntryId
+                    else -> status.mediaEntryId
+                }
+                val entry = entriesById[audioId] ?: return@items
+                Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.MusicNote, contentDescription = null)
+                        Text(status.settingsTitle, Modifier.weight(1f).padding(horizontal = 10.dp), fontWeight = FontWeight.Medium)
+                        CallMediaPreviewButton(
+                            rulePreviewEntries(status, mediaEntries, PhoneExtras(), mode).map {
+                                it.copy(entry = it.entry.copy(title = status.settingsTitle))
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun CallRulesScreen(
@@ -110,37 +151,61 @@ fun CallRulesScreen(
     mediaEntries: List<CallMediaEntry>,
     onAddMedia: suspend (CallMediaEntry) -> Unit,
     onBack: () -> Unit,
-    onSave: (CallScreenVariant, CallFlowConfiguration) -> Unit,
+    onSave: suspend (List<CallStatusRule>) -> Unit,
 ) {
-    var variant by remember { mutableStateOf(CallScreenVariant.WITHOUT_AVATAR) }
-    var current by remember(variant) { mutableStateOf(config.forVariant(variant)) }
-    LaunchedEffect(config, variant) { current = config.forVariant(variant) }
+    var current by remember { mutableStateOf(config.statuses) }
+    LaunchedEffect(config.statuses) { current = config.statuses }
     var editing by remember { mutableStateOf<CallStatusRule?>(null) }
-    SettingsFrame("${variant.title}规则", onBack) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CallScreenVariant.entries.forEach { option ->
-                if (variant == option) Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("${option.title}规则") }
-                else TextButton(onClick = { editing = null; variant = option }, modifier = Modifier.weight(1f)) { Text("${option.title}规则") }
+    var saving by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    fun save(statuses: List<CallStatusRule>) {
+        if (saving) return
+        saving = true
+        saveError = null
+        scope.launch {
+            try {
+                onSave(statuses)
+                current = statuses
+                editing = null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                saveError = "规则保存失败，请重试"
+            } finally {
+                saving = false
             }
+        }
+    }
+
+    BackHandler(enabled = saving) {}
+    SettingsFrame("状态规则", onBack = { if (!saving) onBack() }) {
+        if (editing == null) saveError?.let {
+            Text(it, color = Color(0xFFB3261E), modifier = Modifier.padding(horizontal = 18.dp))
         }
         Text("呼叫、等待、接通和结束的顺序由程序决定。这里调整各状态的显示文字、时长和音频播放。", color = Color(0xFF707782), modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
         LazyColumn(modifier = Modifier.weight(1f)) {
-            items(current.statuses, key = { it.id }) { status ->
-                val categoryCount = extras.promptCategoryRulesFor(variant).values.count { it == status.id }
+            items(current, key = { it.id }) { status ->
+                val categoryCount = CallPromptType.entries.count { extras.promptRuleFor(it) == status.id }
                 val bindingCount = extras.promptNumbers.keys.count {
-                    extras.screenVariantFor(it) == variant && extras.promptRuleFor(it) == status.id
+                    extras.promptRuleFor(it) == status.id
                 }
                 Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)) {
                     Column(Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(status.name, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+                                val remoteHangup = status.id == REMOTE_HANGUP_STATUS_ID
+                                Text(status.settingsTitle, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
                                 val durationLabel = when {
                                     status.durationSeconds > 0 -> "${status.durationSeconds} 秒"
                                     status.stage == CallStage.DISCONNECTING || status.stage == CallStage.DISCONNECTED -> "立即完成"
                                     else -> "不自动计时"
                                 }
-                                Text("${status.stage.title} · $durationLabel", color = Color(0xFF707782))
+                                Text("${if (remoteHangup) status.name else status.stage.title} · $durationLabel", color = Color(0xFF707782))
+                                if (status.stage == CallStage.WAITING) {
+                                    Text("无人接听和忙线先按号码模式响铃，其他提示直接播放", color = Color(0xFF707782), fontSize = 12.sp)
+                                }
                                 val audioName = if (status.playSoundOnce) {
                                     if (status.soundMuted) "静音" else mediaEntries.firstOrNull { it.id == status.soundEntryId }?.title ?: "未选择提示音"
                                 } else mediaEntries.firstOrNull { it.id == status.mediaEntryId }?.title ?: "号码音频池随机"
@@ -151,16 +216,21 @@ fun CallRulesScreen(
                                 }
                                 Text("$audioName · $playCount", color = Color(0xFF707782), fontSize = 12.sp)
                             }
-                            TextButton(onClick = { editing = status }) { Text("编辑") }
-                            if (status.id !in builtInStatusIds && bindingCount == 0 && categoryCount == 0 && current.statuses.none { other ->
+                            TextButton(onClick = { saveError = null; editing = status }, enabled = !saving) { Text("编辑") }
+                            if (status.id !in builtInStatusIds && bindingCount == 0 && categoryCount == 0 && current.none { other ->
                                     other.id != status.id && (other.timeoutTargetId == status.id || other.buttons.any { it.targetStatusId == status.id })
                                 }) {
-                                IconButton(onClick = {
-                                    current = current.copy(statuses = current.statuses.filterNot { it.id == status.id })
-                                    onSave(variant, current)
-                                }) { Icon(Icons.Default.Delete, contentDescription = "删除状态") }
+                                IconButton(
+                                    onClick = { save(current.filterNot { it.id == status.id }) },
+                                    enabled = !saving,
+                                ) { Icon(Icons.Default.Delete, contentDescription = "删除状态") }
                             }
                         }
+                        CallMediaPreviewButton(
+                            entries = rulePreviewEntries(status, mediaEntries, extras, config.selectedAudioMode,
+                                waitingRule = current.firstOrNull { it.stage == CallStage.WAITING }),
+                            enabled = !saving,
+                        )
                         if (bindingCount > 0) Text("已绑定 $bindingCount 个号码", color = Color(0xFF707782), fontSize = 12.sp)
                         if (categoryCount > 0) Text("用于 $categoryCount 类提示音", color = Color(0xFF707782), fontSize = 12.sp)
                     }
@@ -170,13 +240,13 @@ fun CallRulesScreen(
     }
     editing?.let { status ->
         StatusEditorDialog(
-            initial = status, mediaEntries = mediaEntries, onAddMedia = onAddMedia,
-            onDismiss = { editing = null },
-            onApply = { updated ->
-                current = current.copy(statuses = current.statuses.map { if (it.id == updated.id) updated else it })
-                editing = null
-                onSave(variant, current)
-            },
+            initial = status, mediaEntries = mediaEntries, extras = extras, onAddMedia = onAddMedia,
+            mode = config.selectedAudioMode,
+            waitingRule = current.firstOrNull { it.stage == CallStage.WAITING },
+            saving = saving,
+            saveError = saveError,
+            onDismiss = { editing = null; saveError = null },
+            onApply = { updated -> save(current.map { if (it.id == updated.id) updated else it }) },
         )
     }
 }
@@ -185,12 +255,21 @@ fun CallRulesScreen(
 private fun StatusEditorDialog(
     initial: CallStatusRule,
     mediaEntries: List<CallMediaEntry>,
+    extras: PhoneExtras,
+    mode: CallAudioMode,
+    waitingRule: CallStatusRule?,
     onAddMedia: suspend (CallMediaEntry) -> Unit,
+    saving: Boolean,
+    saveError: String?,
     onDismiss: () -> Unit,
     onApply: (CallStatusRule) -> Unit,
 ) {
+    val canEditName = initial.id != REMOTE_HANGUP_STATUS_ID
     var name by remember(initial) { mutableStateOf(initial.name) }
     var duration by remember(initial) { mutableStateOf(initial.durationSeconds.toString()) }
+    var useDefaultPromptWait by remember(initial) { mutableStateOf(initial.useDefaultPromptWait) }
+    var importing by remember { mutableStateOf(false) }
+    var importError by remember { mutableStateOf<String?>(null) }
     var mediaEntryId by remember(initial) { mutableStateOf(initial.mediaEntryId) }
     var mediaMenu by remember { mutableStateOf(false) }
     var soundEntryId by remember(initial) { mutableStateOf(initial.soundEntryId) }
@@ -198,37 +277,91 @@ private fun StatusEditorDialog(
     var soundMuted by remember(initial) { mutableStateOf(initial.soundMuted) }
     var repeatAudio by remember(initial) { mutableStateOf(initial.audioPlayCount != 1) }
     var audioPlayCount by remember(initial) { mutableStateOf(initial.audioPlayCount.toString()) }
+    val selectableMedia = mediaEntries.filter {
+        (it.mode.isCallMode || (initial.stage in setOf(CallStage.OUTCOME, CallStage.VOICEMAIL, CallStage.ACTIVE) && it.mode == CallAudioMode.STATUS_SOUND)) &&
+            (initial.id != REMOTE_HANGUP_STATUS_ID || it.mimeType.startsWith("audio/")) &&
+            it.mode.acceptsMimeType(it.mimeType)
+    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val soundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) scope.launch {
-            val imported = CallMediaFiles.importDocument(context, uri, "status_sounds") ?: return@launch
-            if (!imported.mimeType.startsWith("audio/")) {
-                CallMediaFiles.delete(context, imported.path)
-                return@launch
-            }
-            val entry = CallMediaEntry(
-                id = UUID.randomUUID().toString(),
-                mode = CallAudioMode.STATUS_SOUND,
-                title = imported.title,
-                filePath = imported.path,
-                mimeType = imported.mimeType,
-            )
-            try {
-                onAddMedia(entry)
-                soundEntryId = entry.id
-            } catch (error: Exception) {
-                CallMediaFiles.delete(context, imported.path)
+        if (uri != null) {
+            importing = true
+            importError = null
+            scope.launch {
+                try {
+                    val imported = CallMediaFiles.importDocument(context, uri, "status_sounds")
+                    if (imported == null) {
+                        importError = "音效导入失败"
+                        return@launch
+                    }
+                    if (!imported.mimeType.startsWith("audio/")) {
+                        CallMediaFiles.delete(context, imported.path)
+                        importError = "请选择音频文件"
+                        return@launch
+                    }
+                    val entry = CallMediaEntry(
+                        id = UUID.randomUUID().toString(),
+                        mode = CallAudioMode.STATUS_SOUND,
+                        title = imported.title,
+                        filePath = imported.path,
+                        mimeType = imported.mimeType,
+                    )
+                    try {
+                        onAddMedia(entry)
+                        soundEntryId = entry.id
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        CallMediaFiles.delete(context, imported.path)
+                        importError = "音效保存失败"
+                    }
+                } finally {
+                    importing = false
+                }
             }
         }
     }
+    val busy = saving || importing
+    val durationSeconds = duration.toIntOrNull()?.takeIf { it in 0..86_400 }
+    val playCount = if (playSoundOnce || !repeatAudio) 1 else audioPlayCount.toIntOrNull()
+    val draft = if (durationSeconds != null && playCount != null) {
+        initial.copy(
+            name = if (canEditName) name.ifBlank { "未命名状态" } else initial.name,
+            durationSeconds = durationSeconds,
+            useDefaultPromptWait = useDefaultPromptWait,
+            mediaEntryId = mediaEntryId,
+            soundEntryId = soundEntryId,
+            playSoundOnce = playSoundOnce,
+            soundMuted = soundMuted,
+            audioPlayCount = playCount,
+        )
+    } else null
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("状态规则") },
         text = {
             LazyColumn {
-                item { OutlinedTextField(name, { name = it }, label = { Text("状态名称") }, singleLine = true) }
-                item { OutlinedTextField(duration, { duration = it.filter(Char::isDigit).take(5) }, label = { Text(if (initial.stage == CallStage.DISCONNECTING || initial.stage == CallStage.DISCONNECTED) "状态时长（秒，0 表示立即完成）" else "状态时长（秒，0 表示不按时间推进）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true) }
+                if (canEditName) item {
+                    OutlinedTextField(name, { name = it }, label = { Text("状态名称") }, singleLine = true)
+                }
+                item {
+                    OutlinedTextField(
+                        duration, {
+                            val updated = it.filter(Char::isDigit).take(5)
+                            if (updated != duration) useDefaultPromptWait = false
+                            duration = updated
+                        },
+                        label = { Text("状态时长（秒）") },
+                        isError = durationSeconds == null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        enabled = !busy,
+                    )
+                }
+                (saveError ?: importError)?.let { error ->
+                    item { Text(error, color = Color(0xFFB3261E)) }
+                }
                 item {
                     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -243,7 +376,7 @@ private fun StatusEditorDialog(
                                     mediaEntries.firstOrNull { it.id == soundEntryId && it.mimeType.startsWith("audio/") }?.let { sound ->
                                         Text(sound.title, modifier = Modifier.weight(1f), color = Color(0xFF707782), fontSize = 12.sp, maxLines = 1)
                                     }
-                                    TextButton(onClick = { soundPicker.launch(arrayOf("audio/*")) }) {
+                                    TextButton(onClick = { soundPicker.launch(arrayOf("audio/*")) }, enabled = !busy) {
                                         Text(if (soundEntryId == null) "上传音效" else "更换音效")
                                     }
                                 }
@@ -253,11 +386,11 @@ private fun StatusEditorDialog(
                                 Text("状态期间音频", modifier = Modifier.weight(1f))
                                 Box {
                                     TextButton(onClick = { mediaMenu = true }) {
-                                        Text(mediaEntries.firstOrNull { it.id == mediaEntryId && it.mode.isCallMode && it.mode.acceptsMimeType(it.mimeType) }?.title ?: "号码音频池随机")
+                                        Text(selectableMedia.firstOrNull { it.id == mediaEntryId }?.title ?: "号码音频池随机")
                                     }
                                     DropdownMenu(mediaMenu, { mediaMenu = false }) {
                                         DropdownMenuItem(text = { Text("号码音频池随机") }, onClick = { mediaEntryId = null; mediaMenu = false })
-                                        mediaEntries.filter { it.mode.isCallMode && it.mode.acceptsMimeType(it.mimeType) }.forEach { media ->
+                                        selectableMedia.forEach { media ->
                                             DropdownMenuItem(
                                                 text = { Text(media.mode.title + " · " + media.title) },
                                                 onClick = { mediaEntryId = media.id; mediaMenu = false },
@@ -280,6 +413,12 @@ private fun StatusEditorDialog(
                         }
                     }
                 }
+                if (draft != null) item {
+                    CallMediaPreviewButton(
+                        entries = rulePreviewEntries(draft, mediaEntries, extras, mode, waitingRule),
+                        enabled = !busy,
+                    )
+                }
                 item {
                     Text(
                         "状态顺序由程序决定。普通状态时长为 0 时不按时间推进；挂断步骤的 0 秒表示立即完成。",
@@ -288,10 +427,12 @@ private fun StatusEditorDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = {
-            onApply(initial.copy(name = name.ifBlank { "未命名状态" }, durationSeconds = duration.toIntOrNull()?.coerceIn(0, 86_400) ?: 0, mediaEntryId = mediaEntryId, soundEntryId = soundEntryId, playSoundOnce = playSoundOnce, soundMuted = soundMuted, audioPlayCount = if (repeatAudio) audioPlayCount.toIntOrNull()?.coerceIn(0, 99) ?: 0 else 1))
-        }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        confirmButton = {
+            TextButton(enabled = !busy && draft != null, onClick = {
+                draft?.let(onApply)
+            }) { Text(if (saving) "保存中…" else if (importing) "导入中…" else "保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("取消") } },
     )
 }
 
@@ -337,7 +478,7 @@ fun CallMediaLibraryScreen(
                 importError = "文件格式不符合${mode.title}要求"
                 return@launch
             }
-            val previous = if (mode == CallAudioMode.DEFAULT_TONE) entries.filter { it.mode == CallAudioMode.DEFAULT_TONE } else emptyList()
+            val previous = if (mode == CallAudioMode.DEFAULT_TONE) entries.filter { it.mode == mode && it.id != BUILT_IN_WAITING_TONE_ID } else emptyList()
             try {
                 onAdd(CallMediaEntry(UUID.randomUUID().toString(), mode, imported.title, imported.path, imported.mimeType))
             } catch (error: Exception) {
@@ -348,12 +489,16 @@ fun CallMediaLibraryScreen(
             previous.forEach { old -> runCatching { onDelete(old) } }
         }
     }
+    val modeEntries = entries.filter { it.mode == mode }
+    val visibleEntries = if (mode == CallAudioMode.DEFAULT_TONE && modeEntries.any { it.id != BUILT_IN_WAITING_TONE_ID }) {
+        modeEntries.filter { it.id != BUILT_IN_WAITING_TONE_ID }
+    } else modeEntries
     SettingsFrame("${mode.title}库", onBack, footer = {
         Button(onClick = { picker.launch(if (mode == CallAudioMode.RINGBACK) arrayOf("video/*") else arrayOf("audio/*")) }, modifier = Modifier.fillMaxWidth().padding(16.dp)) { Text("导入文件") }
     }) {
         Text(
             text = when (mode) {
-                CallAudioMode.DEFAULT_TONE -> "普通铃声只保留一个；导入新铃声会替换当前铃声。"
+                CallAudioMode.DEFAULT_TONE -> "等待接听时播放。可以导入一段铃声；删除后恢复内置铃声。"
                 CallAudioMode.RINGBACK -> "彩铃仅支持视频，可添加多个。"
                 CallAudioMode.MUSIC -> "音乐仅支持音频，可添加多个。"
                 CallAudioMode.STATUS_SOUND -> "状态提示音仅支持音频。"
@@ -367,7 +512,7 @@ fun CallMediaLibraryScreen(
         importError?.let { Text(it, color = Color(0xFFB3261E), modifier = Modifier.padding(horizontal = 16.dp)) }
         if (entries.none { it.mode == mode && mode.acceptsMimeType(it.mimeType) }) Text("库中还没有符合格式的内容；模拟拨号时将继续状态规则。", color = Color(0xFF707782), modifier = Modifier.padding(20.dp))
         LazyColumn(modifier = Modifier.weight(1f)) {
-            items(entries.filter { it.mode == mode }, key = { it.id }) { item ->
+            items(visibleEntries, key = { it.id }) { item ->
                 Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         val customIcon = remember(item.iconPath) { item.iconPath?.let { path -> runCatching { BitmapFactory.decodeFile(path)?.asImageBitmap() }.getOrNull() } }
@@ -378,7 +523,10 @@ fun CallMediaLibraryScreen(
                             Text(item.mimeType, color = Color(0xFF707782), fontSize = 12.sp)
                             if (mode == CallAudioMode.RINGBACK) TextButton(onClick = { iconTarget = item.id; iconPicker.launch(arrayOf("image/*")) }) { Text(if (item.iconPath == null) "设置自定义图标" else "更换图标") }
                         }
-                        IconButton(onClick = { scope.launch { onDelete(item) } }) { Icon(Icons.Default.Delete, contentDescription = "删除媒体") }
+                        CallMediaPreviewButton(listOf(CallMediaPreview(item)))
+                        if (item.id != BUILT_IN_WAITING_TONE_ID) {
+                            IconButton(onClick = { scope.launch { onDelete(item) } }) { Icon(Icons.Default.Delete, contentDescription = "删除媒体") }
+                        }
                     }
                 }
             }
@@ -392,6 +540,7 @@ fun CallNumberPoolsScreen(
     config: CallFlowConfiguration,
     extras: PhoneExtras,
     extrasStore: PhoneExtrasStore,
+    mediaEntries: List<CallMediaEntry>,
     onBack: () -> Unit,
     onAddNumber: (String) -> Unit,
     onChangeMode: (String, CallAudioMode) -> Unit,
@@ -405,10 +554,9 @@ fun CallNumberPoolsScreen(
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(entries, key = { it.number }) { entry ->
                 val variant = extras.screenVariantFor(entry.number)
-                val rules = config.forVariant(variant)
                 val promptType = extras.promptFor(entry.number)
                 val prompt = promptType?.let { type ->
-                    val ruleName = rules.statuses.firstOrNull { it.id == extras.promptRuleFor(entry.number) }?.name ?: "规则已删除"
+                    val ruleName = config.statuses.firstOrNull { it.id == extras.promptRuleFor(entry.number) }?.name ?: "规则已删除"
                     "${type.title.removeSuffix("号码")} → $ruleName"
                 }
                 val auto = extras.autoHangUpSecondsFor(entry.number)
@@ -417,6 +565,9 @@ fun CallNumberPoolsScreen(
                         Text(entry.number, fontWeight = FontWeight.SemiBold)
                         Text(listOfNotNull("${variant.title}界面", CallAudioMode.fromStored(entry.mode).title, prompt,
                             auto?.let { "接通后 ${it} 秒自动挂断" }).joinToString(" · "), color = Color(0xFF707782), fontSize = 13.sp)
+                        mediaEntries.firstOrNull { it.id == entry.waitingMediaId }?.let {
+                            Text("固定音频：${it.title}", color = Color(0xFF707782), fontSize = 13.sp)
+                        }
                     }
                 }
             }
@@ -464,7 +615,6 @@ private fun NumberPoolBindingEditor(
     var promptMenu by remember { mutableStateOf(false) }
     val seconds = secondsText.toIntOrNull()
     val validSeconds = secondsText.isBlank() || (seconds != null && seconds in 1..3600)
-    val rules = config.forVariant(variant)
     AlertDialog(onDismissRequest = onDismiss, title = { Text("配置 ${entry.number}") },
         text = { Column {
             Box { TextButton(onClick = { variantMenu = true }) { Text("通话界面：${variant.title}") }
@@ -492,8 +642,8 @@ private fun NumberPoolBindingEditor(
                 }
             }
             if (prompt != null) {
-                val categoryRuleId = extras.promptRuleFor(requireNotNull(prompt), variant)
-                val categoryRuleName = rules.statuses.firstOrNull { it.id == categoryRuleId && it.stage == CallStage.OUTCOME }?.name ?: "未设置有效规则"
+                val categoryRuleId = extras.promptRuleFor(requireNotNull(prompt))
+                val categoryRuleName = config.statuses.firstOrNull { it.id == categoryRuleId && requireNotNull(prompt).acceptsRule(it) }?.name ?: "未设置有效规则"
                 Text("${requireNotNull(prompt).title}统一使用：$categoryRuleName", color = Color.Gray, fontSize = 12.sp)
             }
             OutlinedTextField(secondsText, { secondsText = it.filter(Char::isDigit).take(4) },

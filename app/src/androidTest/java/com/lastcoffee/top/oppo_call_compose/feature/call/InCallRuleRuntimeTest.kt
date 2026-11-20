@@ -8,9 +8,16 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.click
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lastcoffee.top.oppo_call_compose.model.CallAudioMode
+import com.lastcoffee.top.oppo_call_compose.model.CallMediaEntry
+import com.lastcoffee.top.oppo_call_compose.data.CallPromptType
+import com.lastcoffee.top.oppo_call_compose.data.PhoneExtras
+import com.lastcoffee.top.oppo_call_compose.R
+import com.lastcoffee.top.oppo_call_compose.model.withProgrammedCallFlow
 import com.lastcoffee.top.oppo_call_compose.model.CallButtonId
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
@@ -63,6 +70,78 @@ class InCallRuleRuntimeTest {
         bitmap.recycle()
     }
 
+    @Test fun unansweredMusicPlaysBeforeTheOutcomeAndNeverConnects() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val song = File(context.cacheDir, "unanswered-preview-song.mp3")
+        val prompt = File(context.cacheDir, "unanswered-preview-prompt.mp3")
+        context.resources.openRawResource(R.raw.audio_call).use { input -> song.outputStream().use(input::copyTo) }
+        context.resources.openRawResource(R.raw.telephone_hang_up_call).use { input -> prompt.outputStream().use(input::copyTo) }
+        val configuration = CallFlowConfiguration().withProgrammedCallFlow().let { defaults ->
+            defaults.copy(statuses = defaults.statuses.map { status ->
+                when (status.id) {
+                    "dialing" -> status.copy(durationSeconds = 1)
+                    "no_answer" -> status.copy(mediaEntryId = "test-prompt", audioPlayCount = 1)
+                    else -> status
+                }
+            })
+        }
+        compose.setContent {
+            OPPO_Call_ComposeTheme {
+                InCallScreen(
+                    number = "13700000005", mode = CallAudioMode.MUSIC,
+                    initialStatusId = "dialing", configuration = configuration, waitingMediaId = "test-song",
+                    mediaEntries = listOf(
+                        CallMediaEntry("test-song", CallAudioMode.MUSIC, "测试音乐", song.absolutePath, "audio/mpeg"),
+                        CallMediaEntry("test-prompt", CallAudioMode.STATUS_SOUND, "测试提示", prompt.absolutePath, "audio/mpeg"),
+                    ),
+                    extras = PhoneExtras(promptNumbers = mapOf("13700000005" to CallPromptType.NO_ANSWER)),
+                    onCallFinished = { finished.set(it); completions.incrementAndGet() },
+                )
+            }
+        }
+        waitForText("等待接听")
+        waitForText("无人接听")
+        compose.waitUntil(8_000) { finished.get() != null }
+        assertFalse(finished.get()!!.wasConnected)
+        assertEquals(0, finished.get()!!.durationSeconds)
+        assertEquals(1, completions.get())
+    }
+
+    @Test fun voicemailGreetingConnectsAndContinuesIntoTheMessage() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val greeting = File(context.cacheDir, "voicemail-preview-greeting.mp3")
+        context.resources.openRawResource(R.raw.audio_call).use { input -> greeting.outputStream().use(input::copyTo) }
+        val configuration = CallFlowConfiguration().withProgrammedCallFlow().let { defaults ->
+            defaults.copy(statuses = defaults.statuses.map { status ->
+                when (status.id) {
+                    "dialing" -> status.copy(durationSeconds = 1)
+                    "voicemail" -> status.copy(mediaEntryId = "test-greeting")
+                    else -> status
+                }
+            })
+        }
+        compose.setContent {
+            OPPO_Call_ComposeTheme {
+                InCallScreen(
+                    number = "13700000006", mode = CallAudioMode.DEFAULT_TONE,
+                    initialStatusId = "dialing", configuration = configuration,
+                    mediaEntries = listOf(CallMediaEntry("test-greeting", CallAudioMode.STATUS_SOUND, "留言引导", greeting.absolutePath, "audio/mpeg")),
+                    extras = PhoneExtras(promptNumbers = mapOf("13700000006" to CallPromptType.VOICEMAIL)),
+                    onCallFinished = { finished.set(it); completions.incrementAndGet() },
+                )
+            }
+        }
+        waitForText("语音留言")
+        compose.onNodeWithText("等待接听").assertDoesNotExist()
+        waitForText("留言中")
+        screenshot("voicemail-connected")
+        compose.onNodeWithContentDescription("底部挂断区域").performTouchInput { click() }
+        compose.waitUntil(5_000) { finished.get() != null }
+        assertTrue(finished.get()!!.wasConnected)
+        assertTrue(finished.get()!!.durationSeconds >= 2)
+        assertEquals(1, completions.get())
+    }
+
     @Test fun automaticChainKeepsRunningWhileOrdinaryControlsAreUsed() {
         launch(
             CallStatusRule("dial", "规则自动呼叫", CallStage.DIALING, 1, "wait"),
@@ -90,6 +169,19 @@ class InCallRuleRuntimeTest {
         compose.waitUntil(10_000) { finished.get() != null }
         assertTrue(finished.get()!!.wasConnected)
         assertTrue(finished.get()!!.durationSeconds >= 12)
+        assertEquals(1, completions.get())
+    }
+
+    @Test fun tappingBottomSpaceFinishesTheConnectedCall() {
+        launch(
+            CallStatusRule("talk", "通话中", CallStage.ACTIVE),
+            CallStatusRule("ending", "正在挂断", CallStage.DISCONNECTING, 0, "end"),
+            CallStatusRule("end", "已挂断", CallStage.DISCONNECTED),
+        )
+
+        compose.onNodeWithContentDescription("底部挂断区域").performTouchInput { click() }
+        compose.waitUntil(5_000) { finished.get() != null }
+        assertTrue(finished.get()!!.wasConnected)
         assertEquals(1, completions.get())
     }
 
