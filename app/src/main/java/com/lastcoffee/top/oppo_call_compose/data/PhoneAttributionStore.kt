@@ -30,14 +30,14 @@ class PhoneAttributionStore(context: Context) {
     private val attempted = mutableSetOf<String>()
     private val lookup by lazy { PhoneNumberLookup() }
 
-    fun locationFor(number: String): String? = mobileForLookup(number)?.take(7)?.let(mutable.value::get)
+    fun locationFor(number: String): String? = mobileForAttribution(number)?.take(7)?.let(mutable.value::get)
 
     suspend fun request(number: String, custom: PhoneExtras) {
         custom.customLocationMatch(number)?.let { match ->
             log("custom_hit", number, "type=${match.source} location=${match.location.displayText}")
             return
         }
-        val mobile = mobileForLookup(number) ?: run {
+        val mobile = mobileForAttribution(number) ?: run {
             if (normalizePhoneNumber(number).length >= 11) log("skip_invalid", number)
             return
         }
@@ -59,7 +59,11 @@ class PhoneAttributionStore(context: Context) {
             inFlight += prefix
         }
         try {
-            val result = withContext(Dispatchers.IO) { localLocation(mobile) ?: onlineLocation(mobile) }
+            // The local database is keyed by seven digits; its API expects eleven.
+            // Only send a complete, entered number to the online fallback.
+            val result = withContext(Dispatchers.IO) {
+                localLocation(mobile.padEnd(11, '0')) ?: mobile.takeIf { it.length == 11 }?.let(::onlineLocation)
+            }
             if (!result.isNullOrBlank()) {
                 mutable.value = mutable.value + (prefix to result)
                 preferences.edit().putString("by_prefix", JSONObject(mutable.value).toString()).apply()
@@ -70,7 +74,7 @@ class PhoneAttributionStore(context: Context) {
         } finally {
             synchronized(inFlight) {
                 inFlight -= prefix
-                attempted += prefix
+                if (mobile.length == 11) attempted += prefix
             }
         }
     }
@@ -149,12 +153,16 @@ internal fun normalizeCachedPhoneLocation(value: String): String {
 }
 
 internal fun mobileForLookup(number: String): String? {
+    return mobileForAttribution(number)?.takeIf { it.length == 11 }
+}
+
+/** Accept the entered mobile prefix as soon as its seventh digit is available. */
+internal fun mobileForAttribution(number: String): String? {
     val digits = normalizePhoneNumber(number)
     val mobile = when {
-        digits.length == 11 -> digits
-        digits.length == 13 && digits.startsWith("86") -> digits.drop(2)
-        digits.length == 15 && digits.startsWith("0086") -> digits.drop(4)
-        else -> return null
+        digits.startsWith("0086") -> digits.drop(4)
+        digits.startsWith("86") -> digits.drop(2)
+        else -> digits
     }
-    return mobile.takeIf { it.matches(Regex("^1[3-9]\\d{9}$")) }
+    return mobile.takeIf { it.matches(Regex("^1[3-9]\\d{5,9}$")) }
 }

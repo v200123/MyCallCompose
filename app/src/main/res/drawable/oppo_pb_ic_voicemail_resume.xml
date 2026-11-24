@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- com.android.contacts 16.80.15: pb_ic_voicemail_resume.xml -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp"
+    android:height="28dp"
+    android:viewportWidth="28"
+    android:viewportHeight="28">
+    <path android:fillColor="#E6000000" android:fillAlpha="0.08"
+        android:pathData="M14,14m-14,0a14,14 0,1 1,28 0a14,14 0,1 1,-28 0" />
+    <path android:fillColor="#E6000000" android:fillType="evenOdd"
+        android:pathData="M20.643,13.137C21.341,13.521 21.341,14.479 20.643,14.863L11.072,20.115C10.373,20.499 9.5,20.019 9.5,19.252L9.5,8.748C9.5,7.981 10.373,7.501 11.072,7.885L20.643,13.137Z" />
+</vector>

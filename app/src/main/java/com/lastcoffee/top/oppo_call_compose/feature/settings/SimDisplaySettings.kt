@@ -37,7 +37,7 @@ internal fun SimDisplaySettings(extras: PhoneExtrasStore) {
     ) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text("显示双卡拨号", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Text("检测到两张 SIM 卡时显示原有双卡按钮；现有通话记录默认标记卡1", fontSize = 14.sp, color = Color(0xFF858585))
+            Text("关闭时使用单卡样式，通话页隐藏卡号；开启时显示通话卡号，检测到双卡时显示双卡拨号按钮", fontSize = 14.sp, color = Color(0xFF858585))
         }
         Switch(checked = settings.dualSimDisplayEnabled, onCheckedChange = null)
     }

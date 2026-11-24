@@ -61,6 +61,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -99,6 +100,7 @@ import com.lastcoffee.top.oppo_call_compose.ui.common.OppoDividerHeight
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoGreen
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoPrimary
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoSecondary
+import com.lastcoffee.top.oppo_call_compose.ui.common.indicatorColor
 import com.lastcoffee.top.oppo_call_compose.ui.common.oppoIcon
 import com.lastcoffee.top.oppo_call_compose.ui.common.oppoTextStyle
 import com.lastcoffee.top.oppo_call_compose.ui.theme.OPPO_Call_ComposeTheme
@@ -109,6 +111,11 @@ private enum class PhoneTab(val label: String, val icon: ImageVector) {
     CONTACTS("联系人", Icons.Filled.Contacts),
     STORE("营业厅", Icons.Filled.Storefront),
 }
+
+private val DialInputSaver = listSaver<DialInput, Any>(
+    save = { listOf(it.number, it.selectionStart, it.selectionEnd) },
+    restore = { DialInput(it[0] as String, it[1] as Int, it[2] as Int) },
+)
 
 @Composable
 internal fun PhoneHomeScreen(
@@ -132,7 +139,8 @@ internal fun PhoneHomeScreen(
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(PhoneTab.CALLS) }
     var dialPadVisible by rememberSaveable { mutableStateOf(true) }
-    var dialedNumber by rememberSaveable { mutableStateOf("") }
+    var dialInput by rememberSaveable(stateSaver = DialInputSaver) { mutableStateOf(DialInput()) }
+    val dialedNumber = dialInput.number
     var newContactNumber by rememberSaveable { mutableStateOf<String?>(null) }
     var existingContactNumber by rememberSaveable { mutableStateOf<String?>(null) }
     val context = LocalContext.current
@@ -141,14 +149,14 @@ internal fun PhoneHomeScreen(
     LaunchedEffect(pendingDialNumber) {
         if (pendingDialNumber != null) {
             selectedTab = PhoneTab.CALLS
-            dialedNumber = pendingDialNumber
+            dialInput = DialInput(pendingDialNumber)
             dialPadVisible = true
             onDialRequestConsumed()
         }
     }
     BackHandler(enabled = dialPadVisible) {
         dialPadVisible = false
-        dialedNumber = ""
+        dialInput = DialInput()
     }
 
     Surface(color = Color.White, modifier = Modifier.fillMaxSize()) {
@@ -164,13 +172,13 @@ internal fun PhoneHomeScreen(
                         records = records,
                         locationFor = locationFor,
                         dialPadVisible = dialPadVisible,
-                        dialedNumber = dialedNumber,
+                        dialInput = dialInput,
                         onShowDialPad = { dialPadVisible = true },
                         onHideDialPad = {
                             dialPadVisible = false
-                            dialedNumber = ""
+                            dialInput = DialInput()
                         },
-                        onDialNumberChange = { dialedNumber = it },
+                        onDialInputChange = { dialInput = it },
                         onDial = { number ->
                             if (number.isNotBlank()) onStartCall(number, 1) else onDial(number)
                         },
@@ -210,10 +218,10 @@ private fun CallsScreen(
     records: List<CallRecord>,
     locationFor: (String) -> String?,
     dialPadVisible: Boolean,
-    dialedNumber: String,
+    dialInput: DialInput,
     onShowDialPad: () -> Unit,
     onHideDialPad: () -> Unit,
-    onDialNumberChange: (String) -> Unit,
+    onDialInputChange: (DialInput) -> Unit,
     onDial: (String) -> Unit,
     onDialWithSim: (String, Int) -> Unit,
     onShowDetail: (CallRecord) -> Unit,
@@ -227,6 +235,7 @@ private fun CallsScreen(
     onCreateContact: (String) -> Unit,
     onSaveExisting: (String) -> Unit,
 ) {
+    val dialedNumber = dialInput.number
     var missedOnly by rememberSaveable { mutableStateOf(false) }
     var editing by rememberSaveable { mutableStateOf(false) }
     var selectedKeys by remember { mutableStateOf(emptySet<String>()) }
@@ -295,8 +304,9 @@ private fun CallsScreen(
                 )
             }
             if (dialedNumber.isNotBlank()) {
-                DialSearchResults(number = dialedNumber, records = records, allContacts = contacts,
+                DialSearchResults(input = dialInput, records = records, allContacts = contacts,
                     onInfo = onShowDetail, onDial = onDial, locationFor = locationFor,
+                    onInputChange = onDialInputChange,
                     onCreateContact = onCreateContact, onSaveExisting = onSaveExisting)
             } else {
                 CallList(
@@ -330,7 +340,9 @@ private fun CallsScreen(
         ) {
             OppoDialPad(
                 number = dialedNumber,
-                onNumberChange = onDialNumberChange,
+                onNumberChange = { onDialInputChange(DialInput(it)) },
+                input = dialInput,
+                onInputChange = onDialInputChange,
                 onDial = { slot -> if (dialedNumber.isNotBlank()) onDialWithSim(dialedNumber, slot) else onDial(dialedNumber) },
                 onDismiss = onHideDialPad,
                 simLabels = simLabels,
@@ -524,7 +536,7 @@ private fun CallRow(record: CallRecord, location: String?, onInfo: () -> Unit, o
                 Checkbox(checked = selected, onCheckedChange = { onCall() }, modifier = Modifier.padding(top = 8.dp).size(24.dp))
             } else {
                 Icon(painterResource(record.kind.oppoIcon), null,
-                    tint = if (missed) MissedRed else Color.Unspecified,
+                    tint = record.kind.indicatorColor,
                     modifier = Modifier.padding(top = 12.dp).size(16.dp))
             }
             Column(Modifier.weight(1f).padding(start = 8.dp, top = 10.dp, end = 5.dp, bottom = 10.dp)) {
@@ -562,9 +574,12 @@ private fun CallRow(record: CallRecord, location: String?, onInfo: () -> Unit, o
 }
 
 @Composable
-private fun DialSearchResults(number: String, records: List<CallRecord>, allContacts: List<ContactMatch>,
+private fun DialSearchResults(input: DialInput, records: List<CallRecord>, allContacts: List<ContactMatch>,
                               onInfo: (CallRecord) -> Unit, onDial: (String) -> Unit, locationFor: (String) -> String?,
+                              onInputChange: (DialInput) -> Unit,
                               onCreateContact: (String) -> Unit, onSaveExisting: (String) -> Unit) {
+    val context = LocalContext.current
+    val number = input.number
     val contacts = remember(allContacts, number) { matchingDialContacts(allContacts, number) }
     val matches = remember(records, contacts, number) {
         val contactNumbers = contacts.map { dialSearchNumberKey(it.number) }.toSet()
@@ -581,8 +596,7 @@ private fun DialSearchResults(number: String, records: List<CallRecord>, allCont
         val location = if (number.length in 7..20) {
             locationFor(number) ?: contacts.firstOrNull()?.location
         } else null
-        OppoDialNumberHeader(number, location, showDivider = resultsState.canScrollBackward)
-        // dialpad_add_contact starts 116.33dp below the content top.
+        OppoDialNumberHeader(number, location, showDivider = resultsState.canScrollBackward, input = input, onInputChange = onInputChange)
         LazyColumn(state = resultsState, modifier = Modifier.fillMaxSize()) {
             itemsIndexed(contacts) { index, contact ->
                 DialSearchRow(
@@ -609,15 +623,20 @@ private fun DialSearchResults(number: String, records: List<CallRecord>, allCont
             }
             if (matches.isEmpty() && contacts.isEmpty()) {
                 item {
-                    listOf("新建联系人" to R.drawable.oppo_pb_ic_add_contact,
+                    listOf("视频通话" to R.drawable.oppo_pb_ic_video_call,
+                        "新建联系人" to R.drawable.oppo_pb_ic_add_contact,
                         "保存到已有联系人" to R.drawable.oppo_pb_ic_save_to_exist_contact).forEachIndexed { index, (label, drawable) ->
                         Row(Modifier.fillMaxWidth().clickable {
-                            if (index == 0) onCreateContact(number) else onSaveExisting(number)
+                            when (index) {
+                                0 -> android.widget.Toast.makeText(context, "暂不支持视频通话", android.widget.Toast.LENGTH_SHORT).show()
+                                1 -> onCreateContact(number)
+                                else -> onSaveExisting(number)
+                            }
                         }.padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
                             Image(painterResource(drawable), null, Modifier.size(24.dp))
                             Text(label, Modifier.padding(start = 16.dp), style = oppoTextStyle(16.sp, weight = FontWeight.Medium))
                         }
-                        if (index == 0) OppoDivider(start = 56.dp, end = 16.dp)
+                        if (index < 2) OppoDivider(start = 56.dp, end = 16.dp)
                     }
                 }
             }
@@ -661,7 +680,7 @@ private fun DialSearchRow(
                 Image(painterResource(R.drawable.oppo_pb_dr_detail_normal), "详情", Modifier.size(24.dp))
             }
         }
-        if (showDivider) OppoDivider(start = 41.dp, end = 16.dp)
+        if (showDivider) OppoDivider(start = 0.dp, end = 0.dp)
     }
 }
 

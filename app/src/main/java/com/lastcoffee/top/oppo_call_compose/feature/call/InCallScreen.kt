@@ -57,6 +57,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -183,11 +184,14 @@ internal fun InCallScreen(
     var muted by remember { mutableStateOf(false) }
     var speakerOn by remember { mutableStateOf(false) }
     var recording by remember { mutableStateOf(false) }
+    var recordingStartedAt by remember { mutableStateOf<Long?>(null) }
+    var recordingSeconds by remember { mutableIntStateOf(0) }
     var dialpadOpen by remember { mutableStateOf(false) }
     var dtmfDigits by remember { mutableStateOf("") }
     var elapsedSeconds by remember { mutableIntStateOf(0) }
     val callStartedAtMillis = remember(number) { System.currentTimeMillis() }
     val context = LocalContext.current
+    val playbackScope = rememberCoroutineScope()
     var ringbackVideoError by remember(stepRevision) { mutableStateOf(false) }
     val isPreview = LocalInspectionMode.current
     val audioRoute = remember(context, isPreview) { if (isPreview) null else CallAudioRoute(context) }
@@ -242,6 +246,8 @@ internal fun InCallScreen(
         elapsedSeconds = sessionTiming.elapsedSeconds(SystemClock.elapsedRealtime())
         if (executionStep.rule.stage in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)) {
             recording = false
+            recordingStartedAt = null
+            recordingSeconds = 0
             dialpadOpen = false
             dtmfDigits = ""
         }
@@ -381,6 +387,7 @@ internal fun InCallScreen(
             val player = CallOutcomePlayer(
                 context = context,
                 outcome = outcome,
+                scope = playbackScope,
                 onCycle = {},
                 onFinished = { onStepAudioFinished(stepRevision) },
             )
@@ -530,6 +537,16 @@ internal fun InCallScreen(
         }
     }
 
+    LaunchedEffect(recording, recordingStartedAt) {
+        val start = recordingStartedAt ?: return@LaunchedEffect
+        if (recording) {
+            while (true) {
+                recordingSeconds = ((SystemClock.elapsedRealtime() - start).coerceAtLeast(0L) / 1_000L).toInt()
+                delay(200)
+            }
+        }
+    }
+
     val isOutgoing = callState == CallSessionState.DIALING || callState == CallSessionState.WAITING_FOR_ANSWER
     val canHangUp = callState != CallSessionState.DISCONNECTING && callState != CallSessionState.DISCONNECTED
     val showEndedCall = !canHangUp && connectedAt != null
@@ -620,12 +637,15 @@ internal fun InCallScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = if (!hasCallerAvatar) Arrangement.Center else Arrangement.Start,
                 ) {
-                    SimBadge(simSlot)
-                    val status = activeRule.name
-                    Text(status, color = Color.White, fontSize = 18.sp, modifier = Modifier.padding(start = 8.dp))
+                    if (extras.dualSimDisplayEnabled) SimBadge(simSlot)
+                    val status = activeRule.name.takeUnless { callState == CallSessionState.ACTIVE && it == "通话中" }
+                    if (status != null) {
+                        Text(status, color = Color.White, fontSize = 18.sp,
+                            modifier = Modifier.padding(start = if (extras.dualSimDisplayEnabled) 8.dp else 0.dp))
+                    }
                     if (connectedAt != null && callState != CallSessionState.DISCONNECTING) {
                         Text("%02d:%02d".format(elapsedSeconds / 60, elapsedSeconds % 60), color = Color.White, fontSize = 20.sp,
-                            modifier = Modifier.padding(start = 7.dp))
+                            modifier = Modifier.padding(start = if (status != null || extras.dualSimDisplayEnabled) 7.dp else 0.dp))
                     }
                 }
                 if (isOutgoing && ringbackVideoError) {
@@ -672,7 +692,10 @@ internal fun InCallScreen(
                                                 else -> if (dialpadOpen) R.drawable.incall_btn_dialpad_selected else R.drawable.incall_btn_dialpad
                                             }
                                             InCallAction(
-                                                label = rule.label?.takeIf { it.isNotBlank() } ?: id.title,
+                                                label = if (id == CallButtonId.RECORD && recording) {
+                                                    "%02d:%02d".format(recordingSeconds / 60, recordingSeconds % 60)
+                                                } else rule.label?.takeIf { it.isNotBlank() } ?: id.title,
+                                                accessibilityLabel = rule.label?.takeIf { it.isNotBlank() } ?: id.title,
                                                 icon = painterResource(iconId),
                                                 selected = selected,
                                                 enabled = rule.enabled,
@@ -682,7 +705,11 @@ internal fun InCallScreen(
                                             ) {
                                                 onConfiguredButton(id) {
                                                     when (id) {
-                                                        CallButtonId.RECORD -> recording = !recording
+                                                        CallButtonId.RECORD -> {
+                                                            recording = !recording
+                                                            recordingSeconds = 0
+                                                            recordingStartedAt = if (recording) SystemClock.elapsedRealtime() else null
+                                                        }
                                                         CallButtonId.HOLD -> {
                                                             val targetStage = if (callState == CallSessionState.ON_HOLD) CallStage.ACTIVE else CallStage.HOLD
                                                             executor.statuses.firstOrNull { it.stage == targetStage }?.let { transitionToStatus(it.id) }
@@ -850,7 +877,7 @@ private fun RingbackVideo(uri: Uri, playCount: Int, onError: () -> Unit, onStart
 }
 
 @Composable
-private fun InCallAction(label: String, icon: Painter?, selected: Boolean, enabled: Boolean, visualStyle: CallVisualStyle = CallVisualStyle(), iconSizeDp: Int = 36, tintIcon: Boolean = true, onClick: () -> Unit) {
+private fun InCallAction(label: String, icon: Painter?, selected: Boolean, enabled: Boolean, visualStyle: CallVisualStyle = CallVisualStyle(), iconSizeDp: Int = 36, tintIcon: Boolean = true, accessibilityLabel: String = label, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.9f else 1f, tween(if (pressed) 50 else 150), label = "call button press")
@@ -862,7 +889,7 @@ private fun InCallAction(label: String, icon: Painter?, selected: Boolean, enabl
             selected = enabled && selected,
             customColor = visualStyle.backgroundColorArgb?.let { Color(it.toULong()) },
         ) {
-            if (icon != null) Image(icon, contentDescription = label, modifier = Modifier.size(iconSizeDp.dp), alpha = if (enabled) 1f else 0.3f, colorFilter = if (tintIcon) ColorFilter.tint(visualStyle.textColor(if (selected && enabled) Color.Black else Color.White)) else null)
+            if (icon != null) Image(icon, contentDescription = accessibilityLabel, modifier = Modifier.size(iconSizeDp.dp), alpha = if (enabled) 1f else 0.3f, colorFilter = if (tintIcon) ColorFilter.tint(visualStyle.textColor(if (selected && enabled) Color.Black else Color.White)) else null)
         }
         Text(label, color = visualStyle.textColor(if (enabled) Color.White else Color(0x4DFFFFFF)), fontSize = visualStyle.fontSizeSp?.sp ?: 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 6.dp), textAlign = TextAlign.Center)
     }

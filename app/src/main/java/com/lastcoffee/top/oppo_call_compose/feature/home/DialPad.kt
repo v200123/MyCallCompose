@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,7 +62,7 @@ internal fun formatDialNumber(number: String): String =
     }.toString()
 
 @Composable
-internal fun OppoDialNumberHeader(number: String, location: String?, showDivider: Boolean = false) {
+internal fun OppoDialNumberHeader(number: String, location: String?, showDivider: Boolean = false, input: DialInput = DialInput(number), onInputChange: (DialInput) -> Unit = {}) {
     // DialEditText uses the platform's as-you-type formatter, with raw input kept
     // separately for matching, deleting and dialing.
     val displayNumber = remember(number) { formatDialNumber(number) }
@@ -69,17 +70,17 @@ internal fun OppoDialNumberHeader(number: String, location: String?, showDivider
     // then progressively reduces it to 28dp at 17 digits.
     val textSizeDp = 30f - (number.length - 12).coerceIn(0, 5) * 0.4f
     val textSize = with(LocalDensity.current) { textSizeDp.dp.toSp() }
-    Column(Modifier.fillMaxWidth().height(56.33.dp)) {
-        // digits_container.xml: number/location weights are 4 and 2.5; the location
-        // keeps its space when unavailable, so an async lookup cannot move the number.
+    Column(Modifier.fillMaxWidth().height(70.dp)) {
         Box(
-            Modifier.fillMaxWidth().weight(4f).padding(horizontal = 24.dp),
+            Modifier.fillMaxWidth().height(39.dp).padding(horizontal = 24.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(displayNumber, style = oppoTextStyle(textSize, weight = FontWeight.Bold),
+            if (LocalInspectionMode.current) Text(displayNumber, style = oppoTextStyle(textSize, weight = FontWeight.SemiBold),
                 maxLines = 1, overflow = TextOverflow.Clip)
+            else DialNumberEditor(input, textSizeDp, onInputChange, Modifier.fillMaxSize())
         }
-        Box(Modifier.fillMaxWidth().weight(2.5f), contentAlignment = Alignment.TopCenter) {
+        Spacer(Modifier.height(6.dp))
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
             Text(location.orEmpty(), style = oppoTextStyle(14.sp, OppoSecondary), maxLines = 1)
         }
         if (showDivider) OppoDivider(start = 16.dp, end = 16.dp)
@@ -95,6 +96,8 @@ internal fun OppoDialPad(
     onDismiss: () -> Unit,
     simLabels: List<String> = emptyList(),
     dialpadToneEnabled: Boolean = false,
+    input: DialInput = DialInput(number),
+    onInputChange: (DialInput) -> Unit = { onNumberChange(it.number) },
 ) {
     val playTone = rememberDialpadTone(dialpadToneEnabled)
     // dialpad_container.xml + DialpadView: 346dp, 4 x 58dp keys, 20dp grid top,
@@ -124,11 +127,11 @@ internal fun OppoDialPad(
                                     Modifier.size(58.dp).clip(CircleShape).combinedClickable(
                                         interactionSource = interactionSource,
                                         onClickLabel = "输入${key.digit}",
-                                        onClick = { onNumberChange(number + key.digit) },
+                                        onClick = { onInputChange(input.insert(key.digit)) },
                                         onLongClick = when {
-                                            key.digit == "0" -> ({ onNumberChange(number + "+") })
-                                            key.digit == "*" && number.isNotEmpty() -> ({ onNumberChange(number + ",") })
-                                            key.digit == "#" && number.isNotEmpty() -> ({ onNumberChange(number + ";") })
+                                            key.digit == "0" -> ({ onInputChange(input.insert("+")) })
+                                            key.digit == "*" && number.isNotEmpty() -> ({ onInputChange(input.insert(",")) })
+                                            key.digit == "#" && number.isNotEmpty() -> ({ onInputChange(input.insert(";")) })
                                             else -> null
                                         },
                                     ),
@@ -170,8 +173,8 @@ internal fun OppoDialPad(
                 Box(Modifier.weight(1f).height(56.dp), contentAlignment = Alignment.Center) {
                     Box(
                         Modifier.size(56.dp).clip(CircleShape).combinedClickable(
-                            onClick = { onNumberChange(number.dropLast(1)) },
-                            onLongClick = { onNumberChange("") },
+                            onClick = { onInputChange(input.delete()) },
+                            onLongClick = { onInputChange(DialInput()) },
                         ),
                         contentAlignment = Alignment.Center,
                     ) {

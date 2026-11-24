@@ -34,7 +34,23 @@ class PhoneExtrasLocationTest {
         ))
 
         assertEquals("北京", extras.locationFor("0086 13800139999"))
-        assertNull(extras.locationFor("1380013" + "123"))
+        assertEquals("北京", extras.locationFor("1380013"))
+        assertEquals("北京", extras.locationFor("1380013" + "123"))
+        assertEquals("北京", extras.locationFor("+86 1380013"))
+        assertNull(extras.locationFor("138001"))
         assertNull(extras.locationFor("0211380013"))
+    }
+
+    @Test
+    fun automaticLookupAcceptsSevenDigitsAndKeepsFullNumberValidation() {
+        assertNull(mobileForAttribution("138001"))
+        assertEquals("1380013", mobileForAttribution("1380013"))
+        assertEquals("13800138", mobileForAttribution("+86 138 0013 8"))
+        assertEquals("1380013", mobileForAttribution("0086 1380013"))
+        assertNull(mobileForLookup("1380013"))
+        assertEquals("13800138000", mobileForLookup("+86 13800138000"))
+        assertNull(mobileForAttribution("1280013"))
+        assertNull(mobileForAttribution("0211380013"))
+        assertNull(mobileForAttribution("138001380001"))
     }
 }

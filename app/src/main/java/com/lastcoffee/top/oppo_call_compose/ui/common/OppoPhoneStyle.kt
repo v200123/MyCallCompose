@@ -52,3 +52,6 @@ internal val CallKind.oppoIcon: Int
         CallKind.MISSED -> R.drawable.oppo_pb_ic_call_missed
         CallKind.BLOCKED -> R.drawable.oppo_pb_ic_call_declined
     }
+
+internal val CallKind.indicatorColor: Color
+    get() = if (this == CallKind.MISSED) MissedRed else Color(0xFF757575)

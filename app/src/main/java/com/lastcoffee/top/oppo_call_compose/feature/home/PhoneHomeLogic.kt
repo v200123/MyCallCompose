@@ -59,6 +59,53 @@ internal fun dialSearchNumberKey(number: String): String {
     }
 }
 
+/** Keep phone formatting out of the raw dial string, including pasted tel: links. */
+internal fun pastedDialNumber(text: String): String = buildString {
+    text.trim().removePrefix("tel:").substringBefore('?').forEach { character ->
+        when {
+            character in '0'..'9' || character in "*#,;" -> append(character)
+            character == '+' && isEmpty() -> append(character)
+        }
+    }
+}.takeIf { value -> value.any { it in '0'..'9' || it in "*#" } }.orEmpty()
+
+/** Raw dial characters and their selection, independent of the formatted display. */
+internal data class DialInput(
+    val number: String = "",
+    val selectionStart: Int = number.length,
+    val selectionEnd: Int = selectionStart,
+) {
+    fun insert(value: String): DialInput {
+        val start = minOf(selectionStart, selectionEnd).coerceIn(0, number.length)
+        val end = maxOf(selectionStart, selectionEnd).coerceIn(start, number.length)
+        val inserted = value.take((100 - number.length + end - start).coerceAtLeast(0))
+        return DialInput(number.replaceRange(start, end, inserted), start + inserted.length)
+    }
+
+    fun delete(): DialInput {
+        val start = minOf(selectionStart, selectionEnd).coerceIn(0, number.length)
+        val end = maxOf(selectionStart, selectionEnd).coerceIn(start, number.length)
+        return when {
+            start != end -> DialInput(number.removeRange(start, end), start)
+            start > 0 -> DialInput(number.removeRange(start - 1, start), start - 1)
+            else -> this
+        }
+    }
+}
+
+internal fun Char.isDialCharacter(): Boolean = this in '0'..'9' || this in "+*#,;"
+
+internal fun rawDialOffset(display: String, offset: Int): Int = display.take(offset.coerceIn(0, display.length)).count { it.isDialCharacter() }
+
+internal fun formattedDialOffset(display: String, rawOffset: Int): Int {
+    if (rawOffset <= 0) return 0
+    var seen = 0
+    display.forEachIndexed { index, character ->
+        if (character.isDialCharacter() && ++seen == rawOffset) return index + 1
+    }
+    return display.length
+}
+
 internal fun matchingDialContacts(contacts: List<ContactMatch>, query: String): List<ContactMatch> =
     contacts.filter { dialMatchesNumber(it.number, query) }.distinctBy { dialSearchNumberKey(it.number) }
 

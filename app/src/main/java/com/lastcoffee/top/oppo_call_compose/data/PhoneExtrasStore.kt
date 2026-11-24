@@ -86,7 +86,9 @@ data class PhoneExtras(
     internal fun customLocationMatch(number: String): CustomLocationMatch? {
         val digits = normalizePhoneNumber(number)
         locations[digits]?.let { return CustomLocationMatch(it, CustomLocationSource.EXACT_NUMBER) }
-        val mobile = mainlandMobileDigits(digits) ?: return null
+        val mobile = mainlandMobileDigits(digits) ?: return mobileForAttribution(digits)?.take(7)?.let { prefix ->
+            locations[prefix]?.let { CustomLocationMatch(it, CustomLocationSource.SEVEN_DIGIT_PREFIX) }
+        }
         return (locations[mobile] ?: locations["86$mobile"] ?: locations["0086$mobile"])
             ?.let { CustomLocationMatch(it, CustomLocationSource.EXACT_NUMBER) }
             ?: locations[mobile.take(7)]?.let { CustomLocationMatch(it, CustomLocationSource.SEVEN_DIGIT_PREFIX) }

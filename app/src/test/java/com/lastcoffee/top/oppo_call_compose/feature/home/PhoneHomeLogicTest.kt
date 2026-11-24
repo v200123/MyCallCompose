@@ -10,6 +10,44 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PhoneHomeLogicTest {
+    @Test fun keypadAndPasteInsertAtTheCursorAndReplaceASelection() {
+        assertEquals(DialInput("15062159238", 7), DialInput("1509238", 3).insert("6215"))
+        assertEquals(DialInput("15012349138", 7), DialInput("15062159138", 7, 3).insert("1234"))
+    }
+
+    @Test fun backspaceDeletesTheSelectionOrTheCharacterBeforeTheCursor() {
+        assertEquals(DialInput("1509138", 3), DialInput("15062159138", 3, 7).delete())
+        assertEquals(DialInput("1562159138", 2), DialInput("15062159138", 3).delete())
+        assertEquals(DialInput("150", 0), DialInput("150", 0).delete())
+    }
+
+    @Test fun displaySpacesDoNotChangeTheRawNumberSelection() {
+        val display = "150 6215 9138"
+        assertEquals(3, rawDialOffset(display, 4))
+        assertEquals(7, rawDialOffset(display, 8))
+        assertEquals(8, formattedDialOffset(display, 7))
+        assertEquals(display.length, formattedDialOffset(display, 11))
+    }
+
+    @Test fun insertingIntoAFullDialInputKeepsTheUnselectedSuffix() {
+        val number = "1".repeat(100)
+        val input = DialInput(number, 40, 42).insert("2345")
+        assertEquals(100, input.number.length)
+        assertEquals("23", input.number.substring(40, 42))
+        assertEquals(number.drop(42), input.number.drop(42))
+        assertEquals(42, input.selectionStart)
+    }
+
+    @Test fun pastedNumbersPreserveDialableCharactersAndDropFormatting() {
+        assertEquals("+8615062159238", pastedDialNumber(" +86 150-6215-9238 "))
+        assertEquals("15062159238", pastedDialNumber("150 (6215) 9238"))
+        assertEquals("*123#", pastedDialNumber("*123#"))
+        assertEquals("10086,1;2", pastedDialNumber("10086,1;2"))
+        assertEquals("15062159238", pastedDialNumber("tel:15062159238?source=123"))
+        assertEquals("", pastedDialNumber("没有电话号码"))
+        assertEquals("", pastedDialNumber("+"))
+    }
+
     private fun call(number: String, time: Long, kind: CallKind = CallKind.INCOMING) =
         CallRecord(number, "", "2026/10/22", kind, timeMillis = time)
 

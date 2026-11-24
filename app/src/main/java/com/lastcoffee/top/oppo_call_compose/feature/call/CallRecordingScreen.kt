@@ -1,7 +1,5 @@
 package com.lastcoffee.top.oppo_call_compose.feature.call
 
-import android.media.AudioAttributes
-import android.media.MediaPlayer
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,10 +29,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -42,19 +37,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.LifecycleOwner
 import com.lastcoffee.top.oppo_call_compose.model.ManualCall
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoCardPage
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
-import java.util.Locale
 import kotlin.math.roundToInt
 
 @Composable
@@ -164,94 +153,27 @@ internal fun CallRecordingScreen(
 
 @Composable
 private fun RecordingPlayer(audio: Uri) {
-    val context = LocalContext.current
-    val lifecycle = (context as? LifecycleOwner)?.lifecycle
-    var player by remember(audio) { mutableStateOf<MediaPlayer?>(null) }
-    var duration by remember(audio) { mutableIntStateOf(0) }
-    var position by remember(audio) { mutableIntStateOf(0) }
+    val playback = rememberRecordingPlayback(audio)
     var seekingTo by remember(audio) { mutableStateOf<Int?>(null) }
-    var playing by remember(audio) { mutableStateOf(false) }
-    var failed by remember(audio) { mutableStateOf(false) }
-    DisposableEffect(context, audio, lifecycle) {
-        val media = MediaPlayer()
-        fun fail() {
-            player = null
-            playing = false
-            failed = true
-        }
-        try {
-            media.setAudioAttributes(AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            media.setDataSource(context, audio)
-            media.setOnPreparedListener {
-                duration = it.duration.coerceAtLeast(0)
-                player = it
-            }
-            media.setOnCompletionListener {
-                playing = false
-                position = 0
-                runCatching { it.seekTo(0) }
-            }
-            media.setOnErrorListener { _, _, _ -> fail(); true }
-            media.prepareAsync()
-        } catch (_: Exception) {
-            fail()
-        }
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE && playing) {
-                runCatching { media.pause() }
-                playing = false
-            }
-        }
-        lifecycle?.addObserver(observer)
-        onDispose {
-            lifecycle?.removeObserver(observer)
-            media.setOnPreparedListener(null)
-            media.setOnCompletionListener(null)
-            media.setOnErrorListener(null)
-            media.release()
-        }
-    }
-    LaunchedEffect(player, playing) {
-        val media = player ?: return@LaunchedEffect
-        if (!playing) return@LaunchedEffect
-        while (true) {
-            position = runCatching { media.currentPosition }.getOrElse { return@LaunchedEffect }
-            delay(150)
-        }
-    }
-    if (failed) {
+    if (playback.failed) {
         Text("录音文件无法播放", color = MaterialTheme.colorScheme.error)
-    } else if (player == null) {
+    } else if (!playback.ready) {
         Text("正在加载录音…")
     } else {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = {
-                val media = player ?: return@TextButton
-                runCatching { if (playing) media.pause() else media.start() }
-                    .onSuccess { playing = !playing }
-                    .onFailure { failed = true; playing = false }
-            }) { Text(if (playing) "暂停录音" else "播放录音") }
-            Text("${formatRecordingTime((seekingTo ?: position).toLong())} / ${formatRecordingTime(duration.toLong())}")
+            TextButton(onClick = playback::toggle) { Text(if (playback.playing) "暂停录音" else "播放录音") }
+            Text("${formatRecordingTime((seekingTo ?: playback.position).toLong())} / ${formatRecordingTime(playback.duration.toLong())}")
         }
-        if (duration > 0) {
+        if (playback.duration > 0) {
             Slider(
-                value = (seekingTo ?: position).coerceIn(0, duration).toFloat(),
+                value = (seekingTo ?: playback.position).coerceIn(0, playback.duration).toFloat(),
                 onValueChange = { seekingTo = it.roundToInt() },
                 onValueChangeFinished = {
-                    seekingTo?.let { target ->
-                        runCatching { player?.seekTo(target) }.onSuccess { position = target }
-                    }
+                    seekingTo?.let(playback::seekTo)
                     seekingTo = null
                 },
-                valueRange = 0f..duration.toFloat(),
+                valueRange = 0f..playback.duration.toFloat(),
             )
         }
     }
-}
-
-private fun formatRecordingTime(millis: Long): String {
-    val seconds = millis / 1000
-    return String.format(Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60)
 }

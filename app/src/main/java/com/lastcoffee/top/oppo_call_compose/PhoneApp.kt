@@ -28,9 +28,11 @@ import com.lastcoffee.top.oppo_call_compose.data.LocalContactsStore
 import com.lastcoffee.top.oppo_call_compose.data.PhoneExtrasStore
 import com.lastcoffee.top.oppo_call_compose.data.PhoneAttributionStore
 import com.lastcoffee.top.oppo_call_compose.data.mobileForLookup
+import com.lastcoffee.top.oppo_call_compose.data.mobileForAttribution
 import com.lastcoffee.top.oppo_call_compose.data.RingbackBadgeStore
 import com.lastcoffee.top.oppo_call_compose.feature.call.CallDetailScreen
 import com.lastcoffee.top.oppo_call_compose.feature.call.CallRecordingScreen
+import com.lastcoffee.top.oppo_call_compose.feature.call.openRecordingFile
 import com.lastcoffee.top.oppo_call_compose.feature.call.InCallScreen
 import com.lastcoffee.top.oppo_call_compose.feature.contacts.ContactsScreen
 import com.lastcoffee.top.oppo_call_compose.feature.home.PhoneHomeScreen
@@ -91,7 +93,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
     val attributionStore = remember(context) { PhoneAttributionStore(context) }
     val attributions by attributionStore.locations.collectAsState()
     val locationFor: (String) -> String? = { number ->
-        extras.locationFor(number) ?: mobileForLookup(number)?.take(7)?.let(attributions::get)
+        extras.locationFor(number) ?: mobileForAttribution(number)?.take(7)?.let(attributions::get)
     }
     val badgeStore = remember(context) { RingbackBadgeStore(context) }
     val badgeSettings by badgeStore.settings.collectAsState()
@@ -326,6 +328,8 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                         onBack = { backStack.removeLastOrNull() },
                         onDial = { number -> startSimulatedCall(number, 1) },
                         onOpenRecording = { backStack.add(CallRecordingRoute(it)) },
+                        recordingFileFor = { id -> manualCalls.firstOrNull { it.id == id }?.recordingPath?.let(manualCallStore::recordingFile) },
+                        onViewRecordingFile = { file -> openRecordingFile(context, file) },
                         onEditNumber = { number ->
                             while (backStack.size > 1) backStack.removeLastOrNull()
                             pendingDialNumber = number
@@ -351,6 +355,8 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                         onDial = { number -> startSimulatedCall(number, 1) },
                         fromContact = true,
                         onOpenRecording = { backStack.add(CallRecordingRoute(it)) },
+                        recordingFileFor = { id -> manualCalls.firstOrNull { it.id == id }?.recordingPath?.let(manualCallStore::recordingFile) },
+                        onViewRecordingFile = { file -> openRecordingFile(context, file) },
                     )
                 }
                 entry<CallRecordingRoute> { route ->

@@ -36,13 +36,18 @@ class PhoneAttributionRuntimeTest {
 
             val store = PhoneAttributionStore(isolatedContext)
             assertNull(store.locationFor("13800138000"))
-            store.request("13800138000", PhoneExtras())
+            store.request("138001", PhoneExtras())
+            assertNull(store.locationFor("1380013"))
+            store.request("1380013", PhoneExtras())
+            assertEquals("北京 移动", store.locationFor("1380013"))
+            assertNull(store.locationFor("138001"))
             assertEquals("北京 移动", store.locationFor("13800138000"))
             assertEquals("北京 移动", store.locationFor("13800139999"))
 
             // A new store must restore the same local result from its persistent cache.
             val restored = PhoneAttributionStore(isolatedContext)
             assertEquals("北京 移动", restored.locationFor("+86 13800138000"))
+            assertEquals("北京 移动", restored.locationFor("+86 1380013"))
         } finally {
             appContext.deleteSharedPreferences(preferencePrefix + "phone_attributions")
         }
