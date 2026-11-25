@@ -14,8 +14,8 @@ android {
         applicationId = "com.lastcoffee.top.oppo_call_compose"
         minSdk = 26
         targetSdk = 37
-        versionCode = 17
-        versionName = "1.7"
+        versionCode = 18
+        versionName = "1.8"
         buildConfigField("String", "UPDATE_SERVICE_BASE_URL", "\"http://www.lastcoffee.top:8082\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
