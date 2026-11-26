@@ -69,6 +69,21 @@ internal fun pastedDialNumber(text: String): String = buildString {
     }
 }.takeIf { value -> value.any { it in '0'..'9' || it in "*#" } }.orEmpty()
 
+/** The paste shortcut accepts a standalone number or dial code. */
+internal fun qualifiedClipboardDialNumber(text: String): String? {
+    val trimmed = text.trim()
+    val formatted = if (trimmed.startsWith("tel:", ignoreCase = true)) {
+        trimmed.drop(4).substringBefore('?')
+    } else trimmed
+    val number = formatted.filterNot { it in " -()\u00A0\u202F" }
+    if (number.length > 100 || !number.all(Char::isDialCharacter) || '+' in number.drop(1)) return null
+
+    val network = number.takeWhile { it != ',' && it != ';' }
+    val digits = network.count { it in '0'..'9' }
+    val valid = if ('*' in network || '#' in network) digits > 0 else digits in 3..15
+    return number.takeIf { valid }
+}
+
 /** Raw dial characters and their selection, independent of the formatted display. */
 internal data class DialInput(
     val number: String = "",

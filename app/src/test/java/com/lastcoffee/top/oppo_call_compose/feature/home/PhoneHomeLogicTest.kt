@@ -6,6 +6,7 @@ import com.lastcoffee.top.oppo_call_compose.model.ContactMatch
 import java.time.LocalDate
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -46,6 +47,22 @@ class PhoneHomeLogicTest {
         assertEquals("15062159238", pastedDialNumber("tel:15062159238?source=123"))
         assertEquals("", pastedDialNumber("没有电话号码"))
         assertEquals("", pastedDialNumber("+"))
+    }
+
+    @Test fun pasteShortcutRecognizesStandaloneDialNumbers() {
+        assertEquals("+8615062159238", qualifiedClipboardDialNumber(" +86 150-6215-9238 "))
+        assertEquals("02888886666", qualifiedClipboardDialNumber("(028) 8888 6666"))
+        assertEquals("15062159238", qualifiedClipboardDialNumber("TEL:15062159238?source=123"))
+        assertEquals("10086", qualifiedClipboardDialNumber("10086"))
+        assertEquals("*123#", qualifiedClipboardDialNumber("*123#"))
+        assertEquals("10086,1;2", qualifiedClipboardDialNumber("10086,1;2"))
+    }
+
+    @Test fun pasteShortcutRejectsEmptyAndMixedClipboardText() {
+        for (text in listOf("", "  ", "+", "12", "号码 15062159238", "13800138000\n13900139000",
+            "https://example.com/15062159238", "150+6215", "1234567890123456")) {
+            assertNull(text, qualifiedClipboardDialNumber(text))
+        }
     }
 
     private fun call(number: String, time: Long, kind: CallKind = CallKind.INCOMING) =

@@ -185,6 +185,7 @@ fun OppoPhoneApp(onDial: (String) -> Unit = {}, onCheckForUpdate: () -> Unit = {
                         contacts = contacts,
                         dialpadToneEnabled = extras.dialpadToneEnabled,
                         dualSimDisplayEnabled = extras.dualSimDisplayEnabled,
+                        isActive = backStack.lastOrNull() == HomeRoute,
                         onSaveContact = contactsStore::save,
                         onDeleteRecords = { selected ->
                             try { manualCallStore.deleteRecords(selected); true } catch (_: Exception) { false }

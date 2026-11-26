@@ -17,6 +17,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration.Companion.milliseconds
 
 internal enum class CallOutcome(val status: String, val spokenPrompt: String) {
     NO_ANSWER("无人接听", "您拨打的电话暂时无人接听"),
@@ -45,7 +46,7 @@ internal class CallOutcomePlayer(
             } else {
                 val cycles = if (outcome == CallOutcome.NO_ANSWER) 2 else 1
                 // An engine that never completes must still let the call finish.
-                val spoken = withTimeoutOrNull(if (cycles == 2) 20_000L else 10_000L) {
+                val spoken = withTimeoutOrNull((if (cycles == 2) 20_000L else 10_000L).milliseconds) {
                     try {
                         playSpeech(context.applicationContext, cycles)
                     } catch (cancelled: CancellationException) {

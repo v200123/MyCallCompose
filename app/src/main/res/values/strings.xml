@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">电话</string>
+    <string name="dial_paste_number">点击粘贴</string>
+    <string name="dial_dismiss_paste_number">关闭号码粘贴提示</string>
 </resources>

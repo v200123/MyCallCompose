@@ -6,6 +6,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,9 +23,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,7 +37,10 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
@@ -42,6 +49,7 @@ import com.lastcoffee.top.oppo_call_compose.R
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoDivider
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoPrimary
 import com.lastcoffee.top.oppo_call_compose.ui.common.OppoSecondary
+import com.lastcoffee.top.oppo_call_compose.ui.common.OppoTertiary
 import com.lastcoffee.top.oppo_call_compose.ui.common.oppoTextStyle
 import com.lastcoffee.top.oppo_call_compose.ui.common.rememberDialpadTone
 import com.lastcoffee.top.oppo_call_compose.ui.common.rememberDialpadToneInteractionSource
@@ -62,7 +70,13 @@ internal fun formatDialNumber(number: String): String =
     }.toString()
 
 @Composable
-internal fun OppoDialNumberHeader(number: String, location: String?, showDivider: Boolean = false, input: DialInput = DialInput(number), onInputChange: (DialInput) -> Unit = {}) {
+internal fun OppoDialNumberHeader(
+    number: String,
+    location: String?,
+    showDivider: Boolean = false,
+    input: DialInput = DialInput(number),
+    onInputChange: (DialInput) -> Unit = {},
+) {
     // DialEditText uses the platform's as-you-type formatter, with raw input kept
     // separately for matching, deleting and dialing.
     val displayNumber = remember(number) { formatDialNumber(number) }
@@ -85,6 +99,51 @@ internal fun OppoDialNumberHeader(number: String, location: String?, showDivider
         }
         if (showDivider) OppoDivider(start = 16.dp, end = 16.dp)
         else Spacer(Modifier.height(0.33.dp))
+    }
+}
+
+@Composable
+internal fun DialNumberPasteSuggestion(
+    number: String,
+    onPaste: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val formatted = remember(number) { formatDialNumber(number) }
+    val numberSize = if (formatted.length > 17) 20.sp else 26.sp
+    val clearInteraction = remember { MutableInteractionSource() }
+    val clearPressed by clearInteraction.collectIsPressedAsState()
+    Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 56.dp)
+                .clip(RoundedCornerShape(12.dp)).clickable(role = Role.Button, onClick = onPaste)
+                .padding(vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                formatted,
+                style = oppoTextStyle(numberSize, weight = FontWeight.Medium, includeFontPadding = false)
+                    .copy(textDirection = TextDirection.Ltr),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                stringResource(R.string.dial_paste_number),
+                style = oppoTextStyle(12.sp, Color(0xFF247740), FontWeight.Medium, includeFontPadding = false),
+            )
+        }
+        IconButton(
+            onClick = onDismiss,
+            modifier = Modifier.align(Alignment.CenterEnd),
+            interactionSource = clearInteraction,
+        ) {
+            Icon(
+                painterResource(R.drawable.dial_paste_clear),
+                contentDescription = stringResource(R.string.dial_dismiss_paste_number),
+                modifier = Modifier.size(28.dp),
+                tint = if (clearPressed) OppoSecondary else OppoTertiary,
+            )
+        }
     }
 }
 

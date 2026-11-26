@@ -1,5 +1,6 @@
 package com.lastcoffee.top.oppo_call_compose.feature.home
 
+import android.content.ClipboardManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -74,6 +75,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -136,6 +138,7 @@ internal fun PhoneHomeScreen(
     onDeleteRecords: suspend (List<CallRecord>) -> Boolean = { false },
     dialpadToneEnabled: Boolean = false,
     dualSimDisplayEnabled: Boolean = false,
+    isActive: Boolean = true,
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(PhoneTab.CALLS) }
     var dialPadVisible by rememberSaveable { mutableStateOf(true) }
@@ -172,6 +175,7 @@ internal fun PhoneHomeScreen(
                         records = records,
                         locationFor = locationFor,
                         dialPadVisible = dialPadVisible,
+                        isActive = isActive,
                         dialInput = dialInput,
                         onShowDialPad = { dialPadVisible = true },
                         onHideDialPad = {
@@ -218,6 +222,7 @@ private fun CallsScreen(
     records: List<CallRecord>,
     locationFor: (String) -> String?,
     dialPadVisible: Boolean,
+    isActive: Boolean,
     dialInput: DialInput,
     onShowDialPad: () -> Unit,
     onHideDialPad: () -> Unit,
@@ -238,6 +243,27 @@ private fun CallsScreen(
     val dialedNumber = dialInput.number
     var missedOnly by rememberSaveable { mutableStateOf(false) }
     var editing by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    val checkClipboard = isActive && dialPadVisible && !editing && windowFocused
+    val clipboardNumber = rememberClipboardDialNumber(clipboard, enabled = checkClipboard)
+    // Dismissing or pasting hides the suggestion for the current visit to the dialpad.
+    var handledClipboardNumber by remember(checkClipboard, clipboard) { mutableStateOf<ClipboardDialNumber?>(null) }
+    val pasteSuggestion: (@Composable () -> Unit)? = if (clipboardNumber != null && clipboardNumber != handledClipboardNumber) {
+        {
+            DialNumberPasteSuggestion(
+                number = clipboardNumber.number,
+                onPaste = {
+                    if (clipboard?.readDialNumber() == clipboardNumber) {
+                        handledClipboardNumber = clipboardNumber
+                        onDialInputChange(dialInput.insert(clipboardNumber.number))
+                    }
+                },
+                onDismiss = { handledClipboardNumber = clipboardNumber },
+            )
+        }
+    } else null
     var selectedKeys by remember { mutableStateOf(emptySet<String>()) }
     var showDeleteSelected by remember { mutableStateOf(false) }
     val groups = remember(records, missedOnly) { groupHomeCalls(records, missedOnly) }
@@ -276,7 +302,9 @@ private fun CallsScreen(
     val headerProgress = (headerScrollPx / headerTravelPx).coerceIn(0f, 1f)
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize().then(if (dialedNumber.isBlank() && !editing) Modifier.nestedScroll(headerScroll) else Modifier)) {
+        Column(modifier = Modifier.fillMaxSize().then(
+            if (dialedNumber.isBlank() && !editing && pasteSuggestion == null) Modifier.nestedScroll(headerScroll) else Modifier,
+        )) {
             // Opening the dialpad alone keeps the call-page tabs visible; typing a
             // digit switches to the source-style number-search surface.
             if (editing) {
@@ -285,6 +313,7 @@ private fun CallsScreen(
             } else if (!dialPadVisible || dialedNumber.isBlank()) {
                 CallsTopBar(
                     collapseProgress = headerProgress,
+                    showLargeTitle = pasteSuggestion == null,
                     missedOnly = missedOnly,
                     onFilterChange = { missedOnly = it },
                     onMenuClick = { menuVisible = true },
@@ -307,8 +336,10 @@ private fun CallsScreen(
                 DialSearchResults(input = dialInput, records = records, allContacts = contacts,
                     onInfo = onShowDetail, onDial = onDial, locationFor = locationFor,
                     onInputChange = onDialInputChange,
+                    pasteSuggestion = pasteSuggestion,
                     onCreateContact = onCreateContact, onSaveExisting = onSaveExisting)
             } else {
+                pasteSuggestion?.invoke()
                 CallList(
                     groups = groups,
                     locationFor = locationFor,
@@ -397,6 +428,7 @@ private fun CallsScreen(
 @Composable
 private fun CallsTopBar(
     collapseProgress: Float,
+    showLargeTitle: Boolean,
     missedOnly: Boolean,
     onFilterChange: (Boolean) -> Unit,
     onMenuClick: () -> Unit,
@@ -410,7 +442,7 @@ private fun CallsTopBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(107.dp - 55.dp * collapseProgress)
+            .height(52.dp + if (showLargeTitle) 55.dp * (1f - collapseProgress) else 0.dp)
             .background(Color.White),
     ) {
         Box(modifier = Modifier.fillMaxWidth().height(52.dp)) {
@@ -439,11 +471,13 @@ private fun CallsTopBar(
                 }
             }
         }
-        Box(
-            modifier = Modifier.offset(x = 16.dp, y = 47.dp * (1f - collapseProgress)).height(53.dp),
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            Text("通话", style = oppoTextStyle((32f - 14f * collapseProgress).sp, weight = if (collapseProgress < 0.5f) FontWeight.Bold else FontWeight.Medium), maxLines = 1)
+        if (showLargeTitle) {
+            Box(
+                modifier = Modifier.offset(x = 16.dp, y = 47.dp * (1f - collapseProgress)).height(53.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text("通话", style = oppoTextStyle((32f - 14f * collapseProgress).sp, weight = if (collapseProgress < 0.5f) FontWeight.Bold else FontWeight.Medium), maxLines = 1)
+            }
         }
         HorizontalDivider(
             color = OppoDividerColor.copy(alpha = OppoDividerColor.alpha * collapseProgress),
@@ -577,6 +611,7 @@ private fun CallRow(record: CallRecord, location: String?, onInfo: () -> Unit, o
 private fun DialSearchResults(input: DialInput, records: List<CallRecord>, allContacts: List<ContactMatch>,
                               onInfo: (CallRecord) -> Unit, onDial: (String) -> Unit, locationFor: (String) -> String?,
                               onInputChange: (DialInput) -> Unit,
+                              pasteSuggestion: (@Composable () -> Unit)?,
                               onCreateContact: (String) -> Unit, onSaveExisting: (String) -> Unit) {
     val context = LocalContext.current
     val number = input.number
@@ -596,7 +631,9 @@ private fun DialSearchResults(input: DialInput, records: List<CallRecord>, allCo
         val location = if (number.length in 7..20) {
             locationFor(number) ?: contacts.firstOrNull()?.location
         } else null
-        OppoDialNumberHeader(number, location, showDivider = resultsState.canScrollBackward, input = input, onInputChange = onInputChange)
+        OppoDialNumberHeader(number, location, showDivider = resultsState.canScrollBackward, input = input,
+            onInputChange = onInputChange)
+        pasteSuggestion?.invoke()
         LazyColumn(state = resultsState, modifier = Modifier.fillMaxSize()) {
             itemsIndexed(contacts) { index, contact ->
                 DialSearchRow(
