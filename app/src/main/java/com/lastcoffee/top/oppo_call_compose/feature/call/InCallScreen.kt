@@ -77,6 +77,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
@@ -113,6 +114,7 @@ import com.lastcoffee.top.oppo_call_compose.ui.common.rememberDialpadTone
 import com.lastcoffee.top.oppo_call_compose.ui.common.rememberDialpadToneInteractionSource
 import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
 import com.lastcoffee.top.oppo_call_compose.model.defaultButtons
+import com.lastcoffee.top.oppo_call_compose.model.statusDisplay
 import com.lastcoffee.top.oppo_call_compose.ui.theme.OPPO_Call_ComposeTheme
 import kotlinx.coroutines.delay
 
@@ -188,7 +190,7 @@ internal fun InCallScreen(
     var recordingSeconds by remember { mutableIntStateOf(0) }
     var dialpadOpen by remember { mutableStateOf(false) }
     var dtmfDigits by remember { mutableStateOf("") }
-    var elapsedSeconds by remember { mutableIntStateOf(0) }
+    var displayedStatusSeconds by remember { mutableIntStateOf(0) }
     val callStartedAtMillis = remember(number) { System.currentTimeMillis() }
     val context = LocalContext.current
     val playbackScope = rememberCoroutineScope()
@@ -243,7 +245,7 @@ internal fun InCallScreen(
 
     fun refreshExecution() {
         executionStep = executor.step
-        elapsedSeconds = sessionTiming.elapsedSeconds(SystemClock.elapsedRealtime())
+        displayedStatusSeconds = sessionTiming.statusDisplaySeconds(SystemClock.elapsedRealtime())
         if (executionStep.rule.stage in setOf(CallStage.DISCONNECTING, CallStage.DISCONNECTED)) {
             recording = false
             recordingStartedAt = null
@@ -527,13 +529,15 @@ internal fun InCallScreen(
         }.onFailure { finish() }
     }
 
-    LaunchedEffect(connectedAt, callState) {
-        val start = connectedAt
-        if (start != null && (callState == CallSessionState.ACTIVE || callState == CallSessionState.ON_HOLD)) {
-            while (true) {
-                elapsedSeconds = sessionTiming.elapsedSeconds(SystemClock.elapsedRealtime())
-                delay(250)
-            }
+    val statusDisplay = activeRule.statusDisplay(hasConnected = connectedAt != null)
+    val isOutgoing = callState == CallSessionState.DIALING || callState == CallSessionState.WAITING_FOR_ANSWER
+    val canHangUp = callState != CallSessionState.DISCONNECTING && callState != CallSessionState.DISCONNECTED
+    val showEndedCall = !canHangUp && connectedAt != null
+    LaunchedEffect(stepRevision, statusDisplay.showsTimer, showEndedCall) {
+        if (!statusDisplay.showsTimer || showEndedCall) return@LaunchedEffect
+        while (true) {
+            displayedStatusSeconds = sessionTiming.statusDisplaySeconds(SystemClock.elapsedRealtime())
+            delay(250)
         }
     }
 
@@ -547,9 +551,18 @@ internal fun InCallScreen(
         }
     }
 
-    val isOutgoing = callState == CallSessionState.DIALING || callState == CallSessionState.WAITING_FOR_ANSWER
-    val canHangUp = callState != CallSessionState.DISCONNECTING && callState != CallSessionState.DISCONNECTED
-    val showEndedCall = !canHangUp && connectedAt != null
+    val statusSeconds = displayedStatusSeconds.takeIf { statusDisplay.showsTimer }
+    val compactHeight = LocalConfiguration.current.screenHeightDp < 600
+    val headerTop = when {
+        compactHeight -> 12.dp
+        dialpadOpen -> 24.dp
+        else -> 72.dp
+    }
+    val statusTop = when {
+        compactHeight -> 8.dp
+        hasCallerAvatar -> 23.dp
+        else -> 25.dp
+    }
     fun ruleFor(id: CallButtonId) = activeRule.buttons.firstOrNull { it.id == id }
         ?: defaultButtons(activeRule.stage).first { it.id == id }
     val outgoingRow = callState == CallSessionState.DIALING || callState == CallSessionState.WAITING_FOR_ANSWER
@@ -567,7 +580,8 @@ internal fun InCallScreen(
             EndedCallContent(
                 number = formatOutgoingNumber(number),
                 location = location,
-                durationSeconds = elapsedSeconds,
+                statusText = statusDisplay.text,
+                statusSeconds = statusSeconds,
             )
             return@Box
         }
@@ -596,7 +610,7 @@ internal fun InCallScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(start = 16.dp, end = 16.dp, top = if (dialpadOpen) 24.dp else 72.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(start = 16.dp, end = 16.dp, top = headerTop),
                 horizontalAlignment = if (!hasCallerAvatar) Alignment.CenterHorizontally else Alignment.Start,
             ) {
                 if (!hasCallerAvatar) {
@@ -632,22 +646,12 @@ internal fun InCallScreen(
                         }
                     }
                 }
-                Row(
-                    modifier = Modifier.padding(top = if (!hasCallerAvatar) 25.dp else 23.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = if (!hasCallerAvatar) Arrangement.Center else Arrangement.Start,
-                ) {
-                    if (extras.dualSimDisplayEnabled) SimBadge(simSlot)
-                    val status = activeRule.name.takeUnless { callState == CallSessionState.ACTIVE && it == "通话中" }
-                    if (status != null) {
-                        Text(status, color = Color.White, fontSize = 18.sp,
-                            modifier = Modifier.padding(start = if (extras.dualSimDisplayEnabled) 8.dp else 0.dp))
-                    }
-                    if (connectedAt != null && callState != CallSessionState.DISCONNECTING) {
-                        Text("%02d:%02d".format(elapsedSeconds / 60, elapsedSeconds % 60), color = Color.White, fontSize = 20.sp,
-                            modifier = Modifier.padding(start = if (status != null || extras.dualSimDisplayEnabled) 7.dp else 0.dp))
-                    }
-                }
+                CallStatusLine(
+                    statusText = statusDisplay.text,
+                    statusSeconds = statusSeconds,
+                    modifier = Modifier.padding(top = statusTop),
+                    simSlot = simSlot.takeIf { extras.dualSimDisplayEnabled },
+                )
                 if (isOutgoing && ringbackVideoError) {
                     Text("彩铃视频无法播放，请重新选择", color = Color(0xFFFFC9C9), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                 }
@@ -655,7 +659,7 @@ internal fun InCallScreen(
 
             if (dialpadOpen) {
                 InCallDtmfPad(digits = dtmfDigits, onDigit = { dtmfDigits = (dtmfDigits + it).take(256) },
-                    toneEnabled = extras.dialpadToneEnabled)
+                    toneEnabled = extras.dialpadToneEnabled, compactHeight = compactHeight)
             } else {
                 val buttonRows = listOf(
                     listOf(CallButtonId.RECORD, CallButtonId.HOLD, CallButtonId.ADD_CALL),
@@ -752,7 +756,7 @@ internal fun InCallScreen(
 }
 
 @Composable
-private fun EndedCallContent(number: String, location: String, durationSeconds: Int) {
+private fun EndedCallContent(number: String, location: String, statusText: String?, statusSeconds: Int?) {
     Column(
         modifier = Modifier.fillMaxSize()
             .padding(WindowInsets.statusBars.asPaddingValues())
@@ -768,11 +772,30 @@ private fun EndedCallContent(number: String, location: String, durationSeconds: 
             modifier = Modifier.padding(top = 6.dp),
             maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
         )
-        val duration = "%02d:%02d".format(durationSeconds / 60, durationSeconds % 60)
-        Text(
-            "通话结束 $duration", color = Color.White, fontSize = 20.sp,
-            fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 25.dp),
-        )
+        CallStatusLine(statusText, statusSeconds, Modifier.padding(top = 25.dp), ended = true)
+    }
+}
+
+@Composable
+private fun CallStatusLine(
+    statusText: String?,
+    statusSeconds: Int?,
+    modifier: Modifier = Modifier,
+    simSlot: Int? = null,
+    ended: Boolean = false,
+) {
+    val weight = if (ended) FontWeight.Medium else FontWeight.Normal
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (simSlot != null) SimBadge(simSlot)
+        if (statusText != null) {
+            Text(statusText, modifier = Modifier.weight(1f, fill = false),
+                color = Color.White, fontSize = if (ended) 20.sp else 18.sp, fontWeight = weight,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (statusSeconds != null) {
+            Text("%02d:%02d".format(statusSeconds / 60, statusSeconds % 60),
+                color = Color.White, fontSize = 20.sp, fontWeight = weight, maxLines = 1)
+        }
     }
 }
 
@@ -898,7 +921,7 @@ private fun InCallAction(label: String, icon: Painter?, selected: Boolean, enabl
 private fun CallVisualStyle.textColor(fallback: Color): Color = textColorArgb?.let { Color(it.toULong()) } ?: fallback
 
 @Composable
-private fun InCallDtmfPad(digits: String, onDigit: (String) -> Unit, toneEnabled: Boolean) {
+private fun InCallDtmfPad(digits: String, onDigit: (String) -> Unit, toneEnabled: Boolean, compactHeight: Boolean) {
     val playTone = rememberDialpadTone(toneEnabled, inCall = true)
     val keys = listOf("1" to "", "2" to "ABC", "3" to "DEF", "4" to "GHI", "5" to "JKL", "6" to "MNO", "7" to "PQRS", "8" to "TUV", "9" to "WXYZ", "*" to "", "0" to "+", "#" to "")
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -906,7 +929,7 @@ private fun InCallDtmfPad(digits: String, onDigit: (String) -> Unit, toneEnabled
             modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 16.dp), textAlign = TextAlign.Center)
         Spacer(Modifier.height(19.dp))
         keys.chunked(3).forEach { row ->
-            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = if (compactHeight) 4.dp else 8.dp)) {
                 row.forEach { (digit, letters) ->
                     val interactionSource = rememberDialpadToneInteractionSource(digit, playTone)
                     val pressed by interactionSource.collectIsPressedAsState()

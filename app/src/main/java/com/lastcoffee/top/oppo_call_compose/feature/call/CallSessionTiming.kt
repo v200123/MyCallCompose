@@ -29,9 +29,15 @@ internal class CallSessionTiming(val startedAtElapsedMillis: Long) {
     /** Displayed duration; holding and background time remain part of the connected interval. */
     fun elapsedSeconds(now: Long): Int {
         val connectedAt = connectedAtElapsedMillis ?: return 0
-        val durationMillis = ((endedAtElapsedMillis ?: now) - connectedAt).coerceAtLeast(0L)
-        return (durationMillis / 1_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        return secondsBetween(connectedAt, endedAtElapsedMillis ?: now)
     }
+
+    /** A timer shown before connection measures the time spent in the current status. */
+    fun statusDisplaySeconds(now: Long): Int =
+        if (connectedAtElapsedMillis == null) secondsBetween(statusEnteredAtElapsedMillis, now) else elapsedSeconds(now)
+
+    private fun secondsBetween(start: Long, end: Long): Int =
+        ((end - start).coerceAtLeast(0L) / 1_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
 
     /** Persisted duration distinguishes a short connected call from an unanswered call. */
     fun durationSeconds(now: Long): Int =

@@ -6,6 +6,45 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CallRulesTemplateTest {
+    @Test fun builtInPromptsUseReferenceWordingAndKeepSavedOverrides() {
+        val defaults = defaultCallStatuses().associateBy(CallStatusRule::id)
+        val expected = mapOf(
+            "powered_off" to "您拨打的号码已关机",
+            "empty_number" to "您拨打的号码是空号",
+            "in_call" to "对方通话中，请稍后再拨",
+            "no_answer" to "等待接听",
+            "unreachable" to "您拨打的号码暂时无法接通",
+        )
+        for ((id, text) in expected) {
+            assertEquals(CallStatusDisplay(text, false), defaults.getValue(id).statusDisplay(false))
+        }
+        val poweredOff = defaults.getValue("powered_off")
+        assertEquals("自定义关机提示", poweredOff.copy(displayText = "自定义关机提示").statusDisplay(false).text)
+        assertEquals("旧版自定义文字", poweredOff.copy(name = "旧版自定义文字").statusDisplay(false).text)
+        assertEquals(CallStatusDisplay(null, true), defaults.getValue("active").statusDisplay(true))
+    }
+
+    @Test fun statusDisplayCanShowTextTimerOrBothWithLegacyDefaults() {
+        val active = defaultCallStatuses().first { it.id == "active" }
+        assertEquals(CallStatusDisplay(null, true), active.statusDisplay(hasConnected = true))
+        assertEquals(CallStatusDisplay("已接通", true), active.copy(displayText = "已接通").statusDisplay(true))
+        assertEquals(CallStatusDisplay("已接通", false), active.copy(
+            displayText = "已接通", displayMode = CallStatusDisplayMode.TEXT_ONLY,
+        ).statusDisplay(true))
+        assertEquals(CallStatusDisplay(null, true), active.copy(
+            displayText = "已接通", displayMode = CallStatusDisplayMode.TIMER_ONLY,
+        ).statusDisplay(true))
+        assertEquals(CallStatusDisplay("通话中", true), active.copy(
+            displayMode = CallStatusDisplayMode.TEXT_AND_TIMER,
+        ).statusDisplay(true))
+
+        val waiting = defaultCallStatuses().first { it.id == "waiting" }
+        assertEquals(CallStatusDisplay("等待接听", false), waiting.statusDisplay(false))
+        val ended = defaultCallStatuses().first { it.id == "disconnected" }
+        assertEquals(CallStatusDisplay("通话结束", true), ended.statusDisplay(true))
+        assertEquals(CallStatusDisplay("服务结束", true), ended.copy(displayText = "服务结束").statusDisplay(true))
+    }
+
     @Test fun coreStatusEditsSurviveSave() {
         val previous = CallFlowConfiguration()
         val changed = previous.statuses.first { it.id == "waiting" }.copy(name = "我的等待", durationSeconds = 8, audioPlayCount = 2)

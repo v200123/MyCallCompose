@@ -7,6 +7,23 @@ import org.junit.Test
 
 class CallSessionTimingTest {
     @Test
+    fun displayedTimerUsesCurrentStatusBeforeConnectionAndFreezesAfterHangup() {
+        val timing = CallSessionTiming(0L)
+        timing.enterStage(CallStage.WAITING, 1_000L)
+        assertEquals(2, timing.statusDisplaySeconds(3_000L))
+        assertEquals(0, timing.durationSeconds(3_000L))
+
+        timing.enterStage(CallStage.ACTIVE, 4_000L)
+        timing.enterStage(CallStage.HOLD, 7_000L)
+        assertEquals(4, timing.statusDisplaySeconds(8_000L))
+
+        timing.enterStage(CallStage.DISCONNECTING, 9_000L)
+        timing.enterStage(CallStage.DISCONNECTED, 12_000L)
+        assertEquals(5, timing.statusDisplaySeconds(20_000L))
+        assertEquals(5, timing.durationSeconds(20_000L))
+    }
+
+    @Test
     fun unansweredCallHasNoConnectedDuration() {
         val timing = CallSessionTiming(0L)
         timing.enterStage(CallStage.DIALING, 0L)

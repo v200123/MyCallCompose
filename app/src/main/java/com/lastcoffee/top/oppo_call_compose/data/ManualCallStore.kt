@@ -28,6 +28,7 @@ import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
 import com.lastcoffee.top.oppo_call_compose.model.CallMediaEntry
 import com.lastcoffee.top.oppo_call_compose.model.CallSessionSetup
 import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
+import com.lastcoffee.top.oppo_call_compose.model.CallStatusDisplayMode
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
 import com.lastcoffee.top.oppo_call_compose.model.DEFAULT_WAITING_SECONDS
 import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
@@ -434,6 +435,8 @@ private fun encodeStatuses(statuses: List<CallStatusRule>): JSONArray = JSONArra
             put("callerNumberStyle", status.callerNumberStyle.toJson())
             put("locationTextStyle", status.locationTextStyle.toJson())
             put("statusTextStyle", status.statusTextStyle.toJson())
+            status.displayText?.let { put("displayText", it) }
+            if (status.displayMode != CallStatusDisplayMode.DEFAULT) put("displayMode", status.displayMode.name)
             put("buttons", JSONArray().apply { status.buttons.forEach { button -> put(JSONObject().apply {
                 put("id", button.id.name); put("visible", button.visible); put("enabled", button.enabled)
                 put("targetStatusId", button.targetStatusId ?: JSONObject.NULL)
@@ -503,6 +506,8 @@ private fun decodeStatuses(statusesJson: JSONArray, legacy: Boolean): List<CallS
                 callerNumberStyle = item.optJSONObject("callerNumberStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 locationTextStyle = item.optJSONObject("locationTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
                 statusTextStyle = item.optJSONObject("statusTextStyle")?.toVisualStyle() ?: CallVisualStyle(),
+                displayText = if (item.isNull("displayText")) null else item.optString("displayText").trim().ifEmpty { null },
+                displayMode = CallStatusDisplayMode.fromStored(item.optString("displayMode")),
             ).withVisibleCallButtons().let { if (legacy) it.withDefaultStatusAudio() else it })
         }
     }

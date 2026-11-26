@@ -26,6 +26,14 @@ enum class CallStage(val title: String) {
     DISCONNECTING("正在挂断"), DISCONNECTED("已挂断")
 }
 
+enum class CallStatusDisplayMode(val title: String) {
+    DEFAULT("默认显示"), TEXT_ONLY("仅显示文字"), TIMER_ONLY("仅显示计时"), TEXT_AND_TIMER("文字和计时");
+
+    companion object {
+        fun fromStored(value: String?): CallStatusDisplayMode = entries.firstOrNull { it.name == value } ?: DEFAULT
+    }
+}
+
 enum class CallScreenVariant(val title: String) {
     WITHOUT_AVATAR("无头像"), WITH_AVATAR("有头像");
 
@@ -80,7 +88,39 @@ data class CallStatusRule(
     val locationTextStyle: CallVisualStyle = CallVisualStyle(),
     val statusTextStyle: CallVisualStyle = CallVisualStyle(),
     val useDefaultPromptWait: Boolean = false,
+    val displayText: String? = null,
+    val displayMode: CallStatusDisplayMode = CallStatusDisplayMode.DEFAULT,
 )
+
+internal data class CallStatusDisplay(val text: String?, val showsTimer: Boolean)
+
+internal fun CallStatusRule.defaultDisplayText(): String = when {
+    id == "powered_off" && name == "对方已关机" -> "您拨打的号码已关机"
+    id == "empty_number" && name == "空号" -> "您拨打的号码是空号"
+    id == "in_call" && name == "正在通话中" -> "对方通话中，请稍后再拨"
+    id == "no_answer" && name == "无人接听" -> "等待接听"
+    id == "unreachable" && name == "无法接通" -> "您拨打的号码暂时无法接通"
+    else -> name
+}
+
+internal fun CallStatusRule.statusDisplay(hasConnected: Boolean): CallStatusDisplay {
+    val customText = displayText?.takeIf(String::isNotBlank)
+    val text = customText ?: defaultDisplayText()
+    return when (displayMode) {
+        CallStatusDisplayMode.TEXT_ONLY -> CallStatusDisplay(text, false)
+        CallStatusDisplayMode.TIMER_ONLY -> CallStatusDisplay(null, true)
+        CallStatusDisplayMode.TEXT_AND_TIMER -> CallStatusDisplay(text, true)
+        CallStatusDisplayMode.DEFAULT -> {
+            val defaultText = when {
+                customText != null -> customText
+                hasConnected && (stage == CallStage.DISCONNECTING || stage == CallStage.DISCONNECTED) -> "通话结束"
+                (stage == CallStage.ACTIVE || stage == CallStage.VOICEMAIL) && name == "通话中" -> null
+                else -> text
+            }
+            CallStatusDisplay(defaultText, hasConnected)
+        }
+    }
+}
 
 data class CallFlowConfiguration(
     val initialStatusId: String = "dialing",

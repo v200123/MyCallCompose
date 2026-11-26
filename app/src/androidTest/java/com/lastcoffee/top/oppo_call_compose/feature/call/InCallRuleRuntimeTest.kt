@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -21,8 +22,10 @@ import com.lastcoffee.top.oppo_call_compose.model.withProgrammedCallFlow
 import com.lastcoffee.top.oppo_call_compose.model.CallButtonId
 import com.lastcoffee.top.oppo_call_compose.model.CallFlowConfiguration
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
+import com.lastcoffee.top.oppo_call_compose.model.CallStatusDisplayMode
 import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
 import com.lastcoffee.top.oppo_call_compose.model.ManualCall
+import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
 import com.lastcoffee.top.oppo_call_compose.ui.theme.OPPO_Call_ComposeTheme
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
@@ -70,6 +73,30 @@ class InCallRuleRuntimeTest {
         bitmap.recycle()
     }
 
+    @Test fun customStatusTextAndTimerAreRenderedAndCanChangeAtHangup() {
+        launch(
+            CallStatusRule("active", "通话中", CallStage.ACTIVE,
+                displayText = "客服已接通", displayMode = CallStatusDisplayMode.TEXT_AND_TIMER),
+            CallStatusRule("disconnecting", "正在挂断", CallStage.DISCONNECTING, 3, "end",
+                displayText = "服务结束", displayMode = CallStatusDisplayMode.TEXT_ONLY),
+            CallStatusRule("end", "已挂断", CallStage.DISCONNECTED),
+        )
+
+        waitForText("客服已接通")
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("00:01")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("挂断").performClick()
+        waitForText("服务结束")
+        compose.onNode(hasText("00:", substring = true)).assertDoesNotExist()
+        compose.waitUntil(8_000) { finished.get() != null }
+        assertTrue(finished.get()!!.durationSeconds >= 1)
+    }
+
+    @Test fun poweredOffStatusShowsTheFullDefaultPrompt() {
+        val rule = defaultCallStatuses().first { it.id == "powered_off" }
+        launch(rule.copy(mediaEntryId = null))
+        waitForText("您拨打的号码已关机")
+    }
+
     @Test fun unansweredMusicPlaysBeforeTheOutcomeAndNeverConnects() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val song = File(context.cacheDir, "unanswered-preview-song.mp3")
@@ -80,6 +107,7 @@ class InCallRuleRuntimeTest {
             defaults.copy(statuses = defaults.statuses.map { status ->
                 when (status.id) {
                     "dialing" -> status.copy(durationSeconds = 1)
+                    "waiting" -> status.copy(displayText = "等待响铃")
                     "no_answer" -> status.copy(mediaEntryId = "test-prompt", audioPlayCount = 1)
                     else -> status
                 }
@@ -99,8 +127,8 @@ class InCallRuleRuntimeTest {
                 )
             }
         }
+        waitForText("等待响铃")
         waitForText("等待接听")
-        waitForText("无人接听")
         compose.waitUntil(8_000) { finished.get() != null }
         assertFalse(finished.get()!!.wasConnected)
         assertEquals(0, finished.get()!!.durationSeconds)

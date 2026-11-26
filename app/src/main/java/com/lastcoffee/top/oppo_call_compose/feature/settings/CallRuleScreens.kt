@@ -74,9 +74,11 @@ import com.lastcoffee.top.oppo_call_compose.model.CallScreenVariant
 import com.lastcoffee.top.oppo_call_compose.model.CallMediaEntry
 import com.lastcoffee.top.oppo_call_compose.model.BUILT_IN_WAITING_TONE_ID
 import com.lastcoffee.top.oppo_call_compose.model.CallStage
+import com.lastcoffee.top.oppo_call_compose.model.CallStatusDisplayMode
 import com.lastcoffee.top.oppo_call_compose.model.CallStatusRule
 import com.lastcoffee.top.oppo_call_compose.model.REMOTE_HANGUP_STATUS_ID
 import com.lastcoffee.top.oppo_call_compose.model.defaultCallStatuses
+import com.lastcoffee.top.oppo_call_compose.model.defaultDisplayText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -184,7 +186,7 @@ fun CallRulesScreen(
         if (editing == null) saveError?.let {
             Text(it, color = Color(0xFFB3261E), modifier = Modifier.padding(horizontal = 18.dp))
         }
-        Text("呼叫、等待、接通和结束的顺序由程序决定。这里调整各状态的显示文字、时长和音频播放。", color = Color(0xFF707782), modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
+        Text("可调整各状态在通话界面的显示方式、持续时长和音频。", color = Color(0xFF707782), modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(current, key = { it.id }) { status ->
                 val categoryCount = CallPromptType.entries.count { extras.promptRuleFor(it) == status.id }
@@ -200,7 +202,7 @@ fun CallRulesScreen(
                                 val durationLabel = when {
                                     status.durationSeconds > 0 -> "${status.durationSeconds} 秒"
                                     status.stage == CallStage.DISCONNECTING || status.stage == CallStage.DISCONNECTED -> "立即完成"
-                                    else -> "不自动计时"
+                                    else -> "不限时"
                                 }
                                 Text("${if (remoteHangup) status.name else status.stage.title} · $durationLabel", color = Color(0xFF707782))
                                 if (status.stage == CallStage.WAITING) {
@@ -266,6 +268,9 @@ private fun StatusEditorDialog(
 ) {
     val canEditName = initial.id != REMOTE_HANGUP_STATUS_ID
     var name by remember(initial) { mutableStateOf(initial.name) }
+    var displayText by remember(initial) { mutableStateOf(initial.displayText.orEmpty()) }
+    var displayMode by remember(initial) { mutableStateOf(initial.displayMode) }
+    var displayModeMenu by remember { mutableStateOf(false) }
     var duration by remember(initial) { mutableStateOf(initial.durationSeconds.toString()) }
     var useDefaultPromptWait by remember(initial) { mutableStateOf(initial.useDefaultPromptWait) }
     var importing by remember { mutableStateOf(false) }
@@ -328,6 +333,8 @@ private fun StatusEditorDialog(
     val draft = if (durationSeconds != null && playCount != null) {
         initial.copy(
             name = if (canEditName) name.ifBlank { "未命名状态" } else initial.name,
+            displayText = displayText.trim().ifEmpty { null },
+            displayMode = displayMode,
             durationSeconds = durationSeconds,
             useDefaultPromptWait = useDefaultPromptWait,
             mediaEntryId = mediaEntryId,
@@ -337,6 +344,8 @@ private fun StatusEditorDialog(
             audioPlayCount = playCount,
         )
     } else null
+    val editedRule = draft ?: initial
+    val defaultText = editedRule.defaultDisplayText()
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("状态规则") },
@@ -344,6 +353,38 @@ private fun StatusEditorDialog(
             LazyColumn {
                 if (canEditName) item {
                     OutlinedTextField(name, { name = it }, label = { Text("状态名称") }, singleLine = true)
+                }
+                item {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("界面显示方式", modifier = Modifier.weight(1f))
+                        Box {
+                            TextButton(onClick = { displayModeMenu = true }, enabled = !busy) { Text(displayMode.title) }
+                            DropdownMenu(expanded = displayModeMenu, onDismissRequest = { displayModeMenu = false }) {
+                                CallStatusDisplayMode.entries.forEach { mode ->
+                                    DropdownMenuItem(text = { Text(mode.title) }, onClick = {
+                                        displayMode = mode
+                                        displayModeMenu = false
+                                    })
+                                }
+                            }
+                        }
+                    }
+                    if (displayMode != CallStatusDisplayMode.TIMER_ONLY) {
+                        OutlinedTextField(
+                            value = displayText,
+                            onValueChange = { displayText = it },
+                            label = { Text("通话界面文字") },
+                            supportingText = {
+                                Text(if (defaultText != editedRule.name) "留空显示「$defaultText」" else "留空时沿用该状态的默认显示")
+                            },
+                            singleLine = true,
+                            enabled = !busy,
+                        )
+                    }
+                    if (displayMode == CallStatusDisplayMode.TIMER_ONLY || displayMode == CallStatusDisplayMode.TEXT_AND_TIMER) {
+                        Text("接通前显示当前状态用时，接通后显示通话时长。", color = Color(0xFF707782),
+                            fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp))
+                    }
                 }
                 item {
                     OutlinedTextField(
