@@ -177,6 +177,13 @@ internal fun CallDetailScreen(
                                         menuExpanded = false
                                         onEditNumber(number)
                                     })
+                                    val recordingId = record.storedId
+                                    if (recordingId != null && onOpenRecording != null) {
+                                        DropdownMenuItem(text = { Text("上传本地录音") }, onClick = {
+                                            menuExpanded = false
+                                            onOpenRecording(recordingId)
+                                        })
+                                    }
                                     DropdownMenuItem(text = { Text("删除通话记录") }, onClick = {
                                         menuExpanded = false
                                         showDeleteDialog = true

@@ -14,13 +14,13 @@ android {
         applicationId = "com.lastcoffee.top.oppo_call_compose"
         minSdk = 26
         targetSdk = 37
-        versionCode = 18
-        versionName = "1.8"
+        versionCode = 110
+        versionName = "1.10"
         buildConfigField("String", "UPDATE_SERVICE_BASE_URL", "\"http://www.lastcoffee.top:8082\"")
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        ndk {            abiFilters += setOf("arm64-v8a", "x86_64")
+        ndk {
+            abiFilters += setOf("arm64-v8a", "x86_64")
         }
     }
 

@@ -338,20 +338,10 @@ internal fun InCallScreen(
         }
         val originalWindowBackground = window?.decorView?.background
         if (window != null) {
-            // Current Android versions do not let ordinary apps read the
-            // wallpaper bitmap. Show the system wallpaper behind this
-            // transparent call window and blur that layer through WindowManager.
+            // Keep the current system wallpaper visible through the call window.
             window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
             window.setFormat(PixelFormat.TRANSLUCENT)
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER or
-                    WindowManager.LayoutParams.FLAG_DIM_BEHIND or
-                    WindowManager.LayoutParams.FLAG_BLUR_BEHIND,
-            )
-            window.setDimAmount(0f)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                window.attributes = window.attributes.apply { blurBehindRadius = 120 }
-            }
+            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
         }
         onDispose {
             if (window != null && originalAttributes != null) {
